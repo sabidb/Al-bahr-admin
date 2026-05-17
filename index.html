@@ -858,5 +858,20 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       console.log("Firebase ready ✅");
     } catch(e) { console.log("Firebase unavailable:", e.message); }
   </script>
+  <script src="https://unpkg.com/qz-tray@2.2.4/qz-tray.js"></script>
+  function connectQZ() {
+  if (!window.qz) {
+    console.log("QZ not loaded yet");
+    return;
+  }
+
+  qz.websocket.connect()
+    .then(() => console.log("QZ CONNECTED"))
+    .catch(err => console.error("QZ ERROR", err));
+}
+
+window.onload = function () {
+  setTimeout(connectQZ, 1000);
+};
 </body>
 </html>
