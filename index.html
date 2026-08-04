@@ -419,87 +419,130 @@ function CouponsTabNew() {
 }
 
 // ── SETTINGS TAB ──
-function SettingsTabNew() {
-  const [restaurantOpen, setRestaurantOpen] = React.useState(true);
+function SettingsTabNew({ branch, role, branches, codes, onPickBranch }) {
+  const isOwner = role === "owner";
+  const target = (branch && branch !== "all") ? branch : null;
+  const targetName = target ? ((branches.find(b => b.id === target) || {}).name || target) : "";
+
+  const [section, setSection] = React.useState("general");
+  const [savedMsg, setSavedMsg] = React.useState("");
   const [autoAccept, setAutoAccept] = React.useState(false);
   const [soundOn, setSoundOn] = React.useState(true);
-  const [deliveryEnabled, setDeliveryEnabled] = React.useState(true);
-  const [pickupEnabled, setPickupEnabled] = React.useState(true);
   const [notifyWhatsapp, setNotifyWhatsapp] = React.useState(true);
   const [maintenanceMode, setMaintenanceMode] = React.useState(false);
-  const [minOrderAmount, setMinOrderAmount] = React.useState("25");
-  const [deliveryFee, setDeliveryFee] = React.useState("10");
-  const [estimatedDelivery, setEstimatedDelivery] = React.useState("30");
-  const [estimatedPickup, setEstimatedPickup] = React.useState("15");
-  const [saved, setSaved] = React.useState(false);
-  const [section, setSection] = React.useState("general");
+  const [branchSettings, setBranchSettings] = React.useState({});
+  const [codeDraft, setCodeDraft] = React.useState(codes);
+  const [reveal, setReveal] = React.useState(false);
+
+  React.useEffect(() => { setCodeDraft(codes); }, [codes]);
 
   React.useEffect(() => {
-    if (window.FB) {
-      window.FB.getSettings().then(s => {
-        if (s) {
-          if (typeof s.isOpen !== "undefined") setRestaurantOpen(s.isOpen);
-          if (typeof s.autoAccept !== "undefined") setAutoAccept(s.autoAccept);
-          if (typeof s.soundOn !== "undefined") setSoundOn(s.soundOn);
-          if (typeof s.deliveryEnabled !== "undefined") setDeliveryEnabled(s.deliveryEnabled);
-          if (typeof s.pickupEnabled !== "undefined") setPickupEnabled(s.pickupEnabled);
-          if (typeof s.minOrderAmount !== "undefined") setMinOrderAmount(String(s.minOrderAmount));
-          if (typeof s.deliveryFee !== "undefined") setDeliveryFee(String(s.deliveryFee));
-          if (typeof s.estimatedDelivery !== "undefined") setEstimatedDelivery(String(s.estimatedDelivery));
-          if (typeof s.estimatedPickup !== "undefined") setEstimatedPickup(String(s.estimatedPickup));
-        }
-      });
-    }
+    let alive = true;
+    (async () => {
+      if (!window.FB) return;
+      const g = await window.FB.getSettings();
+      if (g && alive) { setAutoAccept(!!g.autoAccept); setSoundOn(g.soundOn !== false); setNotifyWhatsapp(g.notifyWhatsapp !== false); setMaintenanceMode(!!g.maintenanceMode); }
+      const entries = await Promise.all(branches.map(b => window.FB.getBranchSettings(b.id).then(s => [b.id, s])));
+      if (!alive) return;
+      const map = {};
+      entries.forEach(([id, s]) => { if (s) map[id] = s; });
+      setBranchSettings(map);
+    })();
+    return () => { alive = false; };
   }, []);
 
+  const flash = (m) => { setSavedMsg(m || "Saved!"); setTimeout(() => setSavedMsg(""), 2500); };
+  const DEF = { isOpen: true, deliveryEnabled: true, pickupEnabled: true, minOrderAmount: "25", deliveryFee: "10", estimatedDelivery: "30", estimatedPickup: "15" };
+  const bs = (id) => Object.assign({}, DEF, branchSettings[id] || {});
+  const setField = (id, key, val) => setBranchSettings(prev => Object.assign({}, prev, { [id]: Object.assign({}, bs(id), { [key]: val }) }));
+  const toggleOpen = async (id) => {
+    const next = !bs(id).isOpen;
+    setBranchSettings(prev => Object.assign({}, prev, { [id]: Object.assign({}, bs(id), { isOpen: next }) }));
+    if (window.FB) await window.FB.saveBranchSettings(id, { isOpen: next });
+  };
+
   const saveAll = async () => {
-    if (window.FB) await window.FB.saveSettings({
-      isOpen: restaurantOpen, autoAccept, soundOn, deliveryEnabled, pickupEnabled,
-      notifyWhatsapp, maintenanceMode,
-      minOrderAmount: parseFloat(minOrderAmount) || 0,
-      deliveryFee: parseFloat(deliveryFee) || 0,
-      estimatedDelivery: parseInt(estimatedDelivery) || 30,
-      estimatedPickup: parseInt(estimatedPickup) || 15,
-    });
-    setSaved(true); setTimeout(() => setSaved(false), 2500);
+    if (window.FB) {
+      await window.FB.saveSettings({ autoAccept, soundOn, notifyWhatsapp, maintenanceMode });
+      if (target) {
+        const t = bs(target);
+        await window.FB.saveBranchSettings(target, {
+          isOpen: t.isOpen, deliveryEnabled: t.deliveryEnabled !== false, pickupEnabled: t.pickupEnabled !== false,
+          minOrderAmount: parseFloat(t.minOrderAmount) || 0, deliveryFee: parseFloat(t.deliveryFee) || 0,
+          estimatedDelivery: parseInt(t.estimatedDelivery) || 30, estimatedPickup: parseInt(t.estimatedPickup) || 15,
+        });
+      }
+    }
+    flash("Settings saved — live in the customer app!");
+  };
+
+  const saveCodes = async () => {
+    if (window.FB) await window.FB.saveAccess({ owner: codeDraft.owner, kakkiyah: codeDraft.kakkiyah, subhani: codeDraft.subhani, waliy: codeDraft.waliy });
+    flash("Access codes updated");
   };
 
   const sectionTabs = [
     { id: "general", label: "General" },
     { id: "orders", label: "Orders" },
-    { id: "branches", label: "Branches" },
-    { id: "system", label: "System" },
-  ];
+  ].concat(isOwner ? [{ id: "access", label: "Access" }, { id: "branches", label: "Branches" }] : [])
+   .concat([{ id: "system", label: "System" }]);
+
+  const pickPrompt = React.createElement("div", { className: "card", style: { padding: 22, textAlign: "center" } },
+    React.createElement("div", { style: { fontSize: 34, marginBottom: 8 } }, "🏪"),
+    React.createElement("div", { className: "section-title", style: { marginBottom: 6 } }, "Choose a branch"),
+    React.createElement("div", { style: { fontSize: 13, color: "#6B7280", marginBottom: 16 } }, "Settings are per branch. Pick one to edit."),
+    React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+      branches.map(b => React.createElement("button", { key: b.id, onClick: () => onPickBranch(b.id), className: "btn-secondary", style: { padding: "13px 16px", fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center" } },
+        React.createElement("span", null, "🏪 " + b.name), React.createElement("span", { style: { color: "#E60000", fontWeight: 700 } }, "→")))
+    )
+  );
+
+  const codeRow = (key, label) => React.createElement("div", { key: key, style: { marginBottom: 12 } },
+    React.createElement("label", { style: { fontSize: 12, color: "#6B7280", fontWeight: 700, display: "block", marginBottom: 6 } }, label),
+    React.createElement("input", { className: "inp mono", type: reveal ? "text" : "password", value: codeDraft[key] || "", onChange: e => setCodeDraft(Object.assign({}, codeDraft, { [key]: e.target.value })), placeholder: "code" })
+  );
 
   return React.createElement("div", null,
-    saved && React.createElement("div", { style: { background: "#ECFDF5", border: "1px solid #BBF7D0", color: "#059669", padding: "13px 16px", borderRadius: 14, marginBottom: 16, fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 8 } }, "✅ Settings saved and live in customer app!"),
+    savedMsg && React.createElement("div", { style: { background: "#ECFDF5", border: "1px solid #BBF7D0", color: "#059669", padding: "13px 16px", borderRadius: 14, marginBottom: 16, fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 8 } }, "✅ " + savedMsg),
 
-    // Section tabs
-    React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 20, background: "#F4F5F9", borderRadius: 14, padding: 4 } },
-      sectionTabs.map(s => React.createElement("button", { key: s.id, onClick: () => setSection(s.id), style: { flex: 1, padding: "8px 4px", borderRadius: 10, border: "none", background: section === s.id ? "#fff" : "transparent", color: section === s.id ? "#E60000" : "#6B7280", fontSize: 12, fontWeight: section === s.id ? 700 : 500, cursor: "pointer", boxShadow: section === s.id ? "0 1px 6px rgba(0,0,0,0.1)" : "none", transition: "all 0.2s" } }, s.label))
+    // Section pills
+    React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 18, background: "#F4F5F9", borderRadius: 14, padding: 4, overflowX: "auto" } },
+      sectionTabs.map(s => React.createElement("button", { key: s.id, onClick: () => setSection(s.id), style: { flex: "1 0 auto", padding: "8px 12px", borderRadius: 10, border: "none", background: section === s.id ? "#fff" : "transparent", color: section === s.id ? "#E60000" : "#6B7280", fontSize: 12, fontWeight: section === s.id ? 700 : 500, cursor: "pointer", boxShadow: section === s.id ? "0 1px 6px rgba(0,0,0,0.1)" : "none", whiteSpace: "nowrap" } }, s.label))
     ),
 
-    // General section
+    // GENERAL
     section === "general" && React.createElement("div", null,
-      // Status toggle card
-      React.createElement("div", { className: "card", style: { padding: 20, marginBottom: 12, border: restaurantOpen ? "1.5px solid #BBF7D0" : "1.5px solid #FECACA" } },
-        React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 } },
-          React.createElement("div", null,
-            React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: "#1A1D27" } }, "Restaurant Status"),
-            React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 2 } }, restaurantOpen ? "Open · Accepting orders" : "Closed · Not accepting orders")
+      // Open/closed — per branch
+      target
+        ? React.createElement("div", { className: "card", style: { padding: 20, marginBottom: 12, border: bs(target).isOpen ? "1.5px solid #BBF7D0" : "1.5px solid #FECACA" } },
+            React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 } },
+              React.createElement("div", null,
+                React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: "#1A1D27" } }, "🏪 " + targetName + " Status"),
+                React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 2 } }, bs(target).isOpen ? "Open · Accepting orders" : "Closed · Not accepting orders")
+              ),
+              React.createElement(Toggle, { on: bs(target).isOpen, setOn: () => toggleOpen(target) })
+            ),
+            React.createElement("div", { style: { background: bs(target).isOpen ? "#ECFDF5" : "#FFF1F2", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: bs(target).isOpen ? "#059669" : "#E60000", fontWeight: 600 } },
+              bs(target).isOpen ? "🟢 This branch is taking orders now" : "🔴 Paused — customers picking this branch see a closed message")
+          )
+        : React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 12 } },
+            React.createElement("div", { className: "section-title", style: { marginBottom: 14 } }, "Branch Status"),
+            branches.map(b => React.createElement("div", { key: b.id, style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #F3F4F6" } },
+              React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+                React.createElement("span", { style: { width: 9, height: 9, borderRadius: "50%", background: bs(b.id).isOpen ? "#059669" : "#E60000" } }),
+                React.createElement("div", null,
+                  React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27" } }, b.name),
+                  React.createElement("div", { style: { fontSize: 11, color: bs(b.id).isOpen ? "#059669" : "#E60000", fontWeight: 600 } }, bs(b.id).isOpen ? "Open" : "Closed"))
+              ),
+              React.createElement(Toggle, { on: bs(b.id).isOpen, setOn: () => toggleOpen(b.id) })
+            ))
           ),
-          React.createElement(Toggle, { on: restaurantOpen, setOn: setRestaurantOpen })
-        ),
-        React.createElement("div", { style: { background: restaurantOpen ? "#ECFDF5" : "#FFF1F2", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: restaurantOpen ? "#059669" : "#E60000", fontWeight: 600 } },
-          restaurantOpen ? "🟢 Customers can place orders right now" : "🔴 Orders are paused — customers see closed message"
-        )
-      ),
 
-      // Toggles
+      // Global staff toggles
       [
-        { icon: "⚡", label: "Auto Accept Orders", sub: "Skip manual confirmation — orders go straight to preparing", on: autoAccept, setOn: setAutoAccept },
-        { icon: "🔔", label: "Sound Alerts", sub: "Play notification sound for each new order", on: soundOn, setOn: setSoundOn },
-        { icon: "📱", label: "WhatsApp Notifications", sub: "Auto-send WhatsApp to customer on status change", on: notifyWhatsapp, setOn: setNotifyWhatsapp },
+        { icon: "⚡", label: "Auto Accept Orders", sub: "New orders skip straight to Preparing", on: autoAccept, setOn: setAutoAccept },
+        { icon: "🔔", label: "Sound Alerts", sub: "Play a sound for every new order", on: soundOn, setOn: setSoundOn },
+        { icon: "📱", label: "WhatsApp Updates", sub: "Message the customer on status changes", on: notifyWhatsapp, setOn: setNotifyWhatsapp },
       ].map((s, i) =>
         React.createElement("div", { key: i, className: "card", style: { padding: "16px 18px", marginBottom: 10, display: "flex", alignItems: "center", gap: 14 } },
           React.createElement("div", { style: { width: 40, height: 40, borderRadius: 12, background: "#F4F5F9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 } }, s.icon),
@@ -512,93 +555,90 @@ function SettingsTabNew() {
       )
     ),
 
-    // Orders section
-    section === "orders" && React.createElement("div", null,
+    // ORDERS (per branch)
+    section === "orders" && (!target ? pickPrompt : React.createElement("div", null,
+      React.createElement("div", { style: { fontSize: 12, color: "#6B7280", fontWeight: 700, marginBottom: 10 } }, "🏪 " + targetName),
       React.createElement("div", { className: "card", style: { padding: 20, marginBottom: 12 } },
-        React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 16 } }, "Order Types"),
+        React.createElement("div", { className: "section-title", style: { marginBottom: 16 } }, "Order Types"),
         React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } },
-          React.createElement("div", null,
-            React.createElement("div", { style: { fontWeight: 600, fontSize: 13 } }, "🛵 Delivery"),
-            React.createElement("div", { style: { fontSize: 11, color: "#6B7280" } }, "Enable home delivery orders")
-          ),
-          React.createElement(Toggle, { on: deliveryEnabled, setOn: setDeliveryEnabled })
+          React.createElement("div", null, React.createElement("div", { style: { fontWeight: 600, fontSize: 13 } }, "🛵 Delivery"), React.createElement("div", { style: { fontSize: 11, color: "#6B7280" } }, "Home delivery orders")),
+          React.createElement(Toggle, { on: bs(target).deliveryEnabled !== false, setOn: () => setField(target, "deliveryEnabled", !(bs(target).deliveryEnabled !== false)) })
         ),
         React.createElement("div", { style: { height: 1, background: "#EAECF2", margin: "12px 0" } }),
         React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } },
-          React.createElement("div", null,
-            React.createElement("div", { style: { fontWeight: 600, fontSize: 13 } }, "🏃 Pickup"),
-            React.createElement("div", { style: { fontSize: 11, color: "#6B7280" } }, "Enable in-store pickup orders")
-          ),
-          React.createElement(Toggle, { on: pickupEnabled, setOn: setPickupEnabled })
+          React.createElement("div", null, React.createElement("div", { style: { fontWeight: 600, fontSize: 13 } }, "🏃 Pickup"), React.createElement("div", { style: { fontSize: 11, color: "#6B7280" } }, "In-store pickup orders")),
+          React.createElement(Toggle, { on: bs(target).pickupEnabled !== false, setOn: () => setField(target, "pickupEnabled", !(bs(target).pickupEnabled !== false)) })
         )
       ),
-
       React.createElement("div", { className: "card", style: { padding: 20, marginBottom: 12 } },
-        React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 16 } }, "Order Settings"),
+        React.createElement("div", { className: "section-title", style: { marginBottom: 16 } }, "Order Settings"),
         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } },
-          React.createElement("div", null,
-            React.createElement("label", { style: { fontSize: 12, color: "#6B7280", fontWeight: 600, display: "block", marginBottom: 6 } }, "Min. Order (SR)"),
-            React.createElement("input", { className: "inp", type: "number", value: minOrderAmount, onChange: e => setMinOrderAmount(e.target.value), placeholder: "25" })
-          ),
-          React.createElement("div", null,
-            React.createElement("label", { style: { fontSize: 12, color: "#6B7280", fontWeight: 600, display: "block", marginBottom: 6 } }, "Delivery Fee (SR)"),
-            React.createElement("input", { className: "inp", type: "number", value: deliveryFee, onChange: e => setDeliveryFee(e.target.value), placeholder: "10" })
-          ),
-          React.createElement("div", null,
-            React.createElement("label", { style: { fontSize: 12, color: "#6B7280", fontWeight: 600, display: "block", marginBottom: 6 } }, "Delivery ETA (min)"),
-            React.createElement("input", { className: "inp", type: "number", value: estimatedDelivery, onChange: e => setEstimatedDelivery(e.target.value), placeholder: "30" })
-          ),
-          React.createElement("div", null,
-            React.createElement("label", { style: { fontSize: 12, color: "#6B7280", fontWeight: 600, display: "block", marginBottom: 6 } }, "Pickup ETA (min)"),
-            React.createElement("input", { className: "inp", type: "number", value: estimatedPickup, onChange: e => setEstimatedPickup(e.target.value), placeholder: "15" })
-          )
-        )
-      )
-    ),
-
-    // Branches section
-    section === "branches" && React.createElement("div", null,
-      [
-        { name: "Kakkiyah", nameAr: "الكعكية", phone: "0500959394", id: "kakkiyah" },
-        { name: "Subhani", nameAr: "الصبحاني", phone: "0508379339", id: "subhani" },
-        { name: "Waliy Al Ahd", nameAr: "ولي العهد", phone: "0550061771", id: "waliy" },
-      ].map(b =>
-        React.createElement("div", { key: b.id, className: "card", style: { padding: "18px 20px", marginBottom: 12 } },
-          React.createElement("div", { style: { display: "flex", alignItems: "flex-start", gap: 14 } },
-            React.createElement("div", { style: { width: 44, height: 44, borderRadius: 12, background: "#FFF1F2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 } }, "🏪"),
-            React.createElement("div", { style: { flex: 1 } },
-              React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: "#1A1D27" } }, b.name),
-              React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 2 } }, b.nameAr),
-              React.createElement("div", { style: { marginTop: 10, display: "flex", gap: 8 } },
-                React.createElement("a", { href: "tel:" + b.phone, style: { background: "#EFF6FF", color: "#2563EB", padding: "6px 12px", borderRadius: 10, fontSize: 12, fontWeight: 600, textDecoration: "none" } }, "📞 " + b.phone),
-                React.createElement("a", { href: "https://wa.me/966" + b.phone.replace(/^0/,""), target: "_blank", style: { background: "#F0FDF4", color: "#059669", padding: "6px 12px", borderRadius: 10, fontSize: 12, fontWeight: 600, textDecoration: "none" } }, "💬 WhatsApp")
-              )
+          [["minOrderAmount", "Min. Order (SR)", "25"], ["deliveryFee", "Delivery Fee (SR)", "10"], ["estimatedDelivery", "Delivery ETA (min)", "30"], ["estimatedPickup", "Pickup ETA (min)", "15"]].map(([k, lab, ph]) =>
+            React.createElement("div", { key: k },
+              React.createElement("label", { style: { fontSize: 12, color: "#6B7280", fontWeight: 600, display: "block", marginBottom: 6 } }, lab),
+              React.createElement("input", { className: "inp", type: "number", value: String(bs(target)[k]), onChange: e => setField(target, k, e.target.value), placeholder: ph })
             )
           )
         )
       )
+    )),
+
+    // ACCESS (owner only)
+    section === "access" && isOwner && React.createElement("div", null,
+      React.createElement("div", { className: "card", style: { padding: 20, marginBottom: 12 } },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 } },
+          React.createElement("div", { className: "section-title" }, "Login Codes"),
+          React.createElement("button", { onClick: () => setReveal(!reveal), style: { background: "#F4F5F9", border: "none", color: "#6B7280", fontSize: 11, fontWeight: 700, padding: "5px 10px", borderRadius: 8, cursor: "pointer" } }, reveal ? "🙈 Hide" : "👁 Show")
+        ),
+        React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 16 } }, "The owner code sees all branches. Each branch code is locked to its own orders and menu."),
+        codeRow("owner", "👑 Owner code"),
+        codeRow("kakkiyah", "🏪 Kakkiyah code"),
+        codeRow("subhani", "🏪 Subhani code"),
+        codeRow("waliy", "🏪 Waliy Al Ahd code"),
+        React.createElement("div", { style: { background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "10px 12px", fontSize: 11, color: "#92400E", marginTop: 6 } }, "Give each branch only its own code. Changing a code logs that branch out until they use the new one."),
+        React.createElement("button", { onClick: saveCodes, className: "btn-primary", style: { width: "100%", padding: "14px", fontSize: 14, marginTop: 14 } }, "💾 Save Codes")
+      )
     ),
 
-    // System section
+    // BRANCHES (owner only)
+    section === "branches" && isOwner && React.createElement("div", null,
+      branches.map(b => React.createElement("div", { key: b.id, className: "card", style: { padding: "18px 20px", marginBottom: 12 } },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 14 } },
+          React.createElement("div", { style: { width: 44, height: 44, borderRadius: 12, background: bs(b.id).isOpen ? "#ECFDF5" : "#FFF1F2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 } }, "🏪"),
+          React.createElement("div", { style: { flex: 1 } },
+            React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: "#1A1D27" } }, b.name),
+            React.createElement("div", { style: { fontSize: 12, color: bs(b.id).isOpen ? "#059669" : "#E60000", fontWeight: 600, marginTop: 2 } }, bs(b.id).isOpen ? "🟢 Open" : "🔴 Closed")
+          ),
+          React.createElement(Toggle, { on: bs(b.id).isOpen, setOn: () => toggleOpen(b.id) })
+        ),
+        React.createElement("div", { style: { marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" } },
+          React.createElement("button", { onClick: () => onPickBranch(b.id), style: { background: "#FFF1F2", border: "1px solid #FECACA", color: "#E60000", padding: "6px 12px", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, "Manage →"),
+          React.createElement("a", { href: "tel:" + b.phone, style: { background: "#EFF6FF", color: "#2563EB", padding: "6px 12px", borderRadius: 10, fontSize: 12, fontWeight: 600, textDecoration: "none" } }, "📞 " + b.phone),
+          React.createElement("a", { href: "https://wa.me/966" + b.phone.replace(/^0/,""), target: "_blank", style: { background: "#F0FDF4", color: "#059669", padding: "6px 12px", borderRadius: 10, fontSize: 12, fontWeight: 600, textDecoration: "none" } }, "💬 WhatsApp")
+        )
+      ))
+    ),
+
+    // SYSTEM
     section === "system" && React.createElement("div", null,
-      React.createElement("div", { className: "card", style: { padding: 20, marginBottom: 12, border: "1.5px solid #FECACA" } },
-        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 14, marginBottom: 14 } },
+      isOwner && React.createElement("div", { className: "card", style: { padding: 20, marginBottom: 12, border: "1.5px solid #FECACA" } },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 14 } },
           React.createElement("div", { style: { width: 40, height: 40, borderRadius: 12, background: "#FFF1F2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 } }, "🔧"),
           React.createElement("div", { style: { flex: 1 } },
             React.createElement("div", { style: { fontWeight: 600, fontSize: 14, color: "#E60000" } }, "Maintenance Mode"),
-            React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 2 } }, "Show maintenance message to all customers")
+            React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 2 } }, "Show a maintenance message to all customers")
           ),
           React.createElement(Toggle, { on: maintenanceMode, setOn: setMaintenanceMode })
         )
       ),
       React.createElement("div", { className: "card", style: { padding: 20, marginBottom: 12 } },
-        React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 4 } }, "Auto-Close Schedule"),
-        React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 14 } }, "Restaurant is automatically closed at 3:00 AM daily"),
-        React.createElement("div", { style: { background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 12, padding: "12px 14px", fontSize: 12, color: "#92400E" } }, "⏰ Auto-close is active · Restaurant closes at 3:00 AM every night")
+        React.createElement("div", { className: "section-title", style: { marginBottom: 4 } }, "Auto-Close Schedule"),
+        React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 14 } }, "All branches close automatically at 3:00 AM daily"),
+        React.createElement("div", { style: { background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 12, padding: "12px 14px", fontSize: 12, color: "#92400E" } }, "⏰ Active · Reopens when a branch is switched back on")
       ),
       React.createElement("div", { className: "card", style: { padding: 20 } },
-        React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 14 } }, "App Information"),
-        [["Version", "Broast Albahr v8.0"], ["Firebase", "broast-al-bahr"], ["Region", "Middle East (ME-Central1)"], ["Last Updated", new Date().toLocaleDateString("en-GB")]].map(([k,v]) =>
+        React.createElement("div", { className: "section-title", style: { marginBottom: 14 } }, "App Information"),
+        [["Version", "Broast Albahr v9.0"], ["Firebase", "broast-al-bahr"], ["Region", "ME-Central1"], ["Updated", new Date().toLocaleDateString("en-GB")]].map(([k,v]) =>
           React.createElement("div", { key: k, style: { display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #F3F4F6", fontSize: 13 } },
             React.createElement("span", { style: { color: "#6B7280" } }, k),
             React.createElement("span", { className: "mono", style: { color: "#374151", fontWeight: 600, fontSize: 12 } }, v)
@@ -607,12 +647,10 @@ function SettingsTabNew() {
       )
     ),
 
-    // Save button
-    React.createElement("button", {
-      onClick: saveAll,
-      className: "btn-primary",
-      style: { width: "100%", padding: "16px", fontSize: 15, marginTop: 16 }
-    }, "💾 Save All Settings")
+    // Save (hide on access/branches which have their own save)
+    section !== "access" && section !== "branches" && React.createElement("button", {
+      onClick: saveAll, className: "btn-primary", style: { width: "100%", padding: "16px", fontSize: 15, marginTop: 16 }
+    }, "💾 Save Settings")
   );
 }
 
@@ -1052,18 +1090,33 @@ function App() {
     { id: "waliy", name: "Waliy Al Ahd", nameAr: "ولي العهد", phone: "0550061771" },
   ];
   // ── LOGIN CODES ────────────────────────────────────────────
-  // Owner sees ALL branches. Each branch code is locked to only that
-  // branch's incoming orders. Change these codes anytime — keep them secret.
-  const ACCOUNTS = {
-    "albahr2024":   { role: "owner",  branch: "all",      label: "Owner" },
-    "kakkiyah2024": { role: "branch", branch: "kakkiyah", label: "Kakkiyah" },
-    "subhani2024":  { role: "branch", branch: "subhani",  label: "Subhani" },
-    "waliy2024":    { role: "branch", branch: "waliy",    label: "Waliy Al Ahd" },
-  };
+  // Owner sees ALL branches; each branch code is locked to its own orders.
+  // These are the defaults — the owner can change them from Settings › Access,
+  // which stores them in Firebase (settings/access) and they apply everywhere.
+  const DEFAULT_CODES = { owner: "albahr2024", kakkiyah: "kakkiyah2024", subhani: "subhani2024", waliy: "waliy2024" };
+  const [codes, setCodes] = React.useState(DEFAULT_CODES);
   const [role, setRole] = React.useState(null); // "owner" | "branch"
   const [selectedBranch, setSelectedBranch] = React.useState(null);
   const [printerState, setPrinterState] = React.useState("connecting"); // connecting | connected | offline
   const [printerName, setPrinterName] = React.useState("");
+
+  // Load editable access codes from Firebase (falls back to defaults)
+  React.useEffect(() => {
+    let unsub; let timer;
+    const apply = (a) => { if (a) setCodes(Object.assign({}, DEFAULT_CODES, a)); };
+    const load = () => { window.FB.getAccess().then(apply); unsub = window.FB.onAccessChange(apply); };
+    if (window.FB) load();
+    else { timer = setInterval(() => { if (window.FB) { clearInterval(timer); load(); } }, 300); setTimeout(() => clearInterval(timer), 6000); }
+    return () => { if (unsub) unsub(); if (timer) clearInterval(timer); };
+  }, []);
+
+  const resolveCode = (input) => {
+    const c = (input || "").trim();
+    if (!c) return null;
+    if (c === codes.owner) return { role: "owner", branch: "all" };
+    const b = BRANCHES.find(x => codes[x.id] === c);
+    return b ? { role: "branch", branch: b.id } : null;
+  };
 
   const applyBranchFilter = (b) => {
     setSelectedBranch(b);
@@ -1071,7 +1124,7 @@ function App() {
   };
 
   const doLogin = (code) => {
-    const acct = ACCOUNTS[(code || "").trim()];
+    const acct = resolveCode(code);
     if (!acct) { setPwErr(true); return; }
     setRole(acct.role);
     setLoggedIn(true);
@@ -1193,8 +1246,9 @@ function App() {
       if (now.getHours() === 3 && now.getMinutes() === 0) {
         if (window.FB) {
           window.FB.saveSettings({ isOpen: false });
+          BRANCHES.forEach(b => window.FB.saveBranchSettings(b.id, { isOpen: false }));
         }
-        console.log("🔴 Auto-closed at 3:00 AM");
+        console.log("🔴 Auto-closed all branches at 3:00 AM");
       }
     };
     // Check immediately, then every 30 seconds
@@ -1315,6 +1369,30 @@ function App() {
           React.createElement("span", { style: { color: "#E60000", fontWeight: 700, fontSize: 13 } }, "🔔 New order received!"),
           React.createElement("button", { onClick: () => setNewOrderAlert(false), style: { background: "none", border: "none", color: "#9CA3AF", cursor: "pointer", fontSize: 16 } }, "✕")
         ),
+        // Owner: all-branches overview strip
+        role === "owner" && selectedBranch === "all" && (() => {
+          const todayStr = new Date().toDateString();
+          return React.createElement("div", null,
+            React.createElement("div", { style: { fontSize: 11, fontWeight: 800, color: "#9CA3AF", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 10 } }, "Today · All Branches"),
+            React.createElement("div", { style: { display: "flex", gap: 10, overflowX: "auto", paddingBottom: 6, marginBottom: 16 } },
+              BRANCHES.map(b => {
+                const bo = orders.filter(o => o.branch === b.id && new Date(o.date).toDateString() === todayStr);
+                const rev = bo.reduce((s, o) => s + (o.total || 0), 0);
+                const nu = bo.filter(o => o.status === "new").length;
+                return React.createElement("button", {
+                  key: b.id, onClick: () => applyBranchFilter(b.id),
+                  className: "card", style: { minWidth: 140, flexShrink: 0, padding: "14px 15px", textAlign: "left", cursor: "pointer", border: "1px solid #EAECF2", position: "relative" }
+                },
+                  nu > 0 && React.createElement("span", { style: { position: "absolute", top: 10, right: 10, background: "#E60000", color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 20, padding: "2px 7px", animation: "pulse-red 2s infinite" } }, nu + " new"),
+                  React.createElement("div", { style: { fontSize: 13, fontWeight: 800, color: "#1A1D27", marginBottom: 8 } }, "🏪 " + b.name),
+                  React.createElement("div", { className: "metric-num", style: { fontSize: 20, color: "#E60000", lineHeight: 1 } }, bo.length),
+                  React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginTop: 2 } }, "orders"),
+                  React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "#059669", marginTop: 8 } }, "SR " + rev.toFixed(0))
+                );
+              })
+            )
+          );
+        })(),
         (() => {
           const todayStr = new Date().toDateString();
           const todayOrders = orders.filter(o => new Date(o.date).toDateString() === todayStr);
@@ -1345,7 +1423,7 @@ function App() {
       tab === "menu" && React.createElement(MenuTabNew, { branch: selectedBranch, role: role, branches: BRANCHES, seedMenu: menu, onPickBranch: applyBranchFilter }),
       tab === "coupons" && React.createElement(CouponsTabNew, null),
       tab === "customers" && React.createElement(CustomersTabNew, { customers: customers }),
-      tab === "settings" && React.createElement(SettingsTabNew, null)
+      tab === "settings" && React.createElement(SettingsTabNew, { branch: selectedBranch, role: role, branches: BRANCHES, codes: codes, onPickBranch: applyBranchFilter })
     ),
 
     // Bottom navigation
@@ -1393,7 +1471,15 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         saveBranchMenu: async function(b,m){ try{ await setDoc(doc(_db,"settings","menu_"+b),{menu:m,updatedAt:serverTimestamp()}); }catch(e){} },
         onBranchMenuChange: function(b,cb){ return onSnapshot(doc(_db,"settings","menu_"+b),function(s){ if(s.exists())cb(s.data().menu); }); },
         getSettings: async function(){ try{ var s=await getDoc(doc(_db,"settings","restaurant")); return s.exists()?s.data():{isOpen:true}; }catch(e){ return {isOpen:true}; } },
-        saveSettings: async function(d){ try{ await setDoc(doc(_db,"settings","restaurant"),Object.assign({},d,{updatedAt:serverTimestamp()})); }catch(e){} },
+        saveSettings: async function(d){ try{ await setDoc(doc(_db,"settings","restaurant"),Object.assign({},d,{updatedAt:serverTimestamp()}),{merge:true}); }catch(e){} },
+        // Per-branch settings (open/closed, fees, ETA) — settings/branch_<id>
+        getBranchSettings: async function(b){ try{ var s=await getDoc(doc(_db,"settings","branch_"+b)); return s.exists()?s.data():null; }catch(e){ return null; } },
+        saveBranchSettings: async function(b,d){ try{ await setDoc(doc(_db,"settings","branch_"+b),Object.assign({},d,{updatedAt:serverTimestamp()}),{merge:true}); }catch(e){} },
+        onBranchSettingsChange: function(b,cb){ return onSnapshot(doc(_db,"settings","branch_"+b),function(s){ if(s.exists())cb(s.data()); }); },
+        // Editable access codes — settings/access
+        getAccess: async function(){ try{ var s=await getDoc(doc(_db,"settings","access")); return s.exists()?s.data():null; }catch(e){ return null; } },
+        saveAccess: async function(d){ try{ await setDoc(doc(_db,"settings","access"),Object.assign({},d,{updatedAt:serverTimestamp()}),{merge:true}); }catch(e){} },
+        onAccessChange: function(cb){ return onSnapshot(doc(_db,"settings","access"),function(s){ if(s.exists())cb(s.data()); }); },
         saveOrder: async function(o){ try{ await addDoc(collection(_db,"orders"),Object.assign({},o,{createdAt:serverTimestamp(),status:"new"})); }catch(e){} },
         updateOrderStatus: async function(id,s){ try{ await updateDoc(doc(_db,"orders",id),{status:s,updatedAt:serverTimestamp()}); }catch(e){} },
         saveCustomer: async function(d){ try{ await setDoc(doc(_db,"customers",d.phone),Object.assign({},d,{lastSeen:serverTimestamp()}),{merge:true}); }catch(e){} },
