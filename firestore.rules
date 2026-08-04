@@ -1,0 +1,69 @@
+rules_version = '2';
+
+// ═══════════════════════════════════════════════════════════════
+// Broast Albahr — Firestore Security Rules
+// ═══════════════════════════════════════════════════════════════
+//
+// Public (no login, POS ordering page):
+//   • READ  settings/menu, settings/restaurant, settings/coupons
+//   • CREATE any orders/{orderId}
+//   • WRITE customers/{phone}  (upsert customer profile on order)
+//
+// Authenticated staff (any user with a users/{uid} profile doc):
+//   • READ  orders, customers, other settings
+//   • UPDATE orders (status changes, etc.)
+//
+// Owner (users/{uid}.role == "owner"):
+//   • WRITE menu, restaurant, coupons, sensitive settings
+//   • DELETE orders
+//   • CREATE / UPDATE / DELETE users/{uid} profile docs
+//
+// Everything else: denied.
+// ═══════════════════════════════════════════════════════════════
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn()   { return request.auth != null; }
+    function hasProfile() { return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function role()       { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role; }
+    function isOwner()    { return hasProfile() && role() == "owner"; }
+    function isStaff()    { return hasProfile() && (role() == "owner" || role() == "branch"); }
+
+    // ── Public settings (menu, hours, coupons) ─────────────────
+    match /settings/menu       { allow read: if true;      allow write: if isOwner(); }
+    match /settings/restaurant { allow read: if true;      allow write: if isOwner(); }
+    match /settings/coupons    { allow read: if true;      allow write: if isOwner(); }
+
+    // ── Sensitive settings: owner only ─────────────────────────
+    match /settings/accounts   { allow read, write: if isOwner(); }
+
+    // Catch-all for any other future settings doc
+    match /settings/{other}    { allow read: if isStaff(); allow write: if isOwner(); }
+
+    // ── Orders: POS creates; staff read & update; owner deletes
+    match /orders/{orderId} {
+      allow create: if true;
+      allow read:   if isStaff();
+      allow update: if isStaff();
+      allow delete: if isOwner();
+    }
+
+    // ── Customers: POS can upsert on order; staff read ─────────
+    match /customers/{phone} {
+      allow read:  if isStaff();
+      allow write: if true;
+    }
+
+    // ── User profile docs (role + branchId) ────────────────────
+    // Read: signed-in user can read their own; owner can read all.
+    // Write: owner only.
+    match /users/{uid} {
+      allow read:  if signedIn() && (request.auth.uid == uid || isOwner());
+      allow create, update, delete: if isOwner();
+    }
+
+    // ── Default: deny everything else ──────────────────────────
+    match /{document=**} { allow read, write: if false; }
+  }
+}

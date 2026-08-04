@@ -400,10 +400,9 @@ function CouponsTabNew() {
 // ── SETTINGS TAB ──
 function SettingsTabNew(props) {
   const settingsIsOwner = !!(props && props.isOwner);
-  const settingsAccounts = (props && props.accounts) || { ownerPassword: "", branchPasswords: {} };
-  const setSettingsAccounts = (props && props.setAccounts) || (() => {});
   const settingsBranches = (props && props.branches) || [];
   const settingsLogout = (props && props.doLogout) || (() => {});
+  const settingsEmail = (props && props.authEmail) || "";
   const [restaurantOpen, setRestaurantOpen] = React.useState(true);
   const [autoAccept, setAutoAccept] = React.useState(false);
   const [soundOn, setSoundOn] = React.useState(true);
@@ -599,53 +598,121 @@ function SettingsTabNew(props) {
     }, "💾 Save All Settings"),
 
     // Access / passwords panel
-    React.createElement(AccessPanel, { isOwner: settingsIsOwner, accounts: settingsAccounts, setAccounts: setSettingsAccounts, branches: settingsBranches, doLogout: settingsLogout })
+    React.createElement(StaffPanel, { isOwner: settingsIsOwner, branches: settingsBranches, doLogout: settingsLogout, authEmail: settingsEmail })
   );
 }
 
 // ── ACCESS PANEL (settings sub-panel) ──
-function AccessPanel({ isOwner, accounts, setAccounts, branches, doLogout }) {
-  const [ownerPw, setOwnerPw] = React.useState(accounts.ownerPassword || "");
-  const [branchPw, setBranchPw] = React.useState(() => Object.assign({}, accounts.branchPasswords || {}));
-  const [saved, setSaved] = React.useState(false);
-  const [saving, setSaving] = React.useState(false);
-  React.useEffect(() => { setOwnerPw(accounts.ownerPassword || ""); setBranchPw(Object.assign({}, accounts.branchPasswords || {})); }, [accounts]);
+// ── STAFF MANAGEMENT PANEL (Firebase Auth-backed) ──
+function StaffPanel({ isOwner, branches, doLogout, authEmail }) {
+  const [staff, setStaff] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+  const [adding, setAdding] = React.useState(false);
+  const [newEmail, setNewEmail] = React.useState("");
+  const [newPw, setNewPw] = React.useState("");
+  const [newBranch, setNewBranch] = React.useState((branches[0] && branches[0].id) || "");
+  const [msg, setMsg] = React.useState("");
+  const [err, setErr] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
 
-  const savePasswords = async () => {
-    if (!ownerPw || ownerPw.length < 4) { alert("Owner password must be at least 4 characters."); return; }
-    for (const b of branches) {
-      const v = branchPw[b.id];
-      if (!v || v.length < 4) { alert(b.name + " password must be at least 4 characters."); return; }
+  const load = async () => {
+    if (!isOwner || !window.FB || !window.FB.listStaff) return;
+    setLoading(true);
+    try { setStaff(await window.FB.listStaff()); } finally { setLoading(false); }
+  };
+  React.useEffect(() => { load(); }, [isOwner]);
+
+  const branchName = id => (branches.find(b => b.id === id) || {}).name || id;
+
+  const addStaff = async () => {
+    setMsg(""); setErr("");
+    const email = newEmail.trim();
+    if (!email || newPw.length < 6) { setErr("Enter an email and a password of at least 6 characters."); return; }
+    if (!newBranch) { setErr("Pick a branch."); return; }
+    if (!window.Auth || !window.Auth.createStaff) { setErr("Auth service not ready."); return; }
+    setBusy(true);
+    const res = await window.Auth.createStaff(email, newPw, { role: "branch", branchId: newBranch });
+    setBusy(false);
+    if (!res.ok) {
+      setErr(res.error === "auth/email-already-in-use" ? "That email is already used." :
+             res.error === "auth/weak-password" ? "Password is too weak (min 6 chars)." :
+             res.error === "auth/invalid-email" ? "Invalid email format." :
+             "Could not create user: " + res.error);
+      return;
     }
-    setSaving(true);
-    const payload = { ownerPassword: ownerPw, branchPasswords: branchPw };
-    let ok = true;
-    if (window.FB && window.FB.saveAccounts) { ok = await window.FB.saveAccounts(payload); }
-    setSaving(false);
-    if (ok) { setAccounts(payload); setSaved(true); setTimeout(() => setSaved(false), 2500); }
+    setMsg("✅ Added " + email + " as " + branchName(newBranch) + " manager.");
+    setNewEmail(""); setNewPw(""); setAdding(false);
+    load();
+    setTimeout(() => setMsg(""), 4000);
+  };
+
+  const resetPw = async (email) => {
+    if (!window.Auth || !window.Auth.reset) return;
+    try { await window.Auth.reset(email); setMsg("📧 Password reset email sent to " + email); setTimeout(() => setMsg(""), 4000); }
+    catch(e) { setErr("Could not send reset email: " + ((e && e.message) || "error")); }
+  };
+
+  const removeStaff = async (u) => {
+    if (u.role === "owner") { alert("Cannot remove the owner from here. Delete the owner user in the Firebase Console if needed."); return; }
+    if (!confirm("Remove " + (u.email || u.uid) + " from staff? They will lose access on next request.\n\nNote: this removes their role profile but NOT their Firebase Auth account. Delete the Auth account in Firebase Console for full removal.")) return;
+    const ok = await window.FB.deleteStaff(u.uid);
+    if (ok) { setMsg("Removed."); load(); setTimeout(() => setMsg(""), 3000); }
   };
 
   if (!isOwner) {
     return React.createElement("div", { className: "card", style: { marginTop: 20, padding: 18, borderLeft: "4px solid #E60000" } },
-      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 6 } }, "🔒 Account"),
-      React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 14 } }, "Passwords are managed by the owner."),
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 4 } }, "🔒 Account"),
+      React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 6 } }, "Signed in as ", React.createElement("b", null, authEmail || "—")),
+      React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 14 } }, "Passwords and roles are managed by the owner. Use Forgot Password on the sign-in screen to reset your own."),
       React.createElement("button", { onClick: doLogout, className: "btn-secondary", style: { width: "100%", padding: "12px", fontSize: 13 } }, "🚪 Sign Out")
     );
   }
+
   return React.createElement("div", { className: "card", style: { marginTop: 20, padding: 18, borderLeft: "4px solid #E60000" } },
-    React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 4 } }, "🔐 Access Passwords"),
-    React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 14 } }, "Set the owner password and each branch manager's password. Changes sync to Firestore."),
-    React.createElement("div", { style: { marginBottom: 14 } },
-      React.createElement("label", { style: { fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" } }, "👑 Owner Password"),
-      React.createElement("input", { type: "text", className: "inp", value: ownerPw, onChange: e => setOwnerPw(e.target.value), placeholder: "Owner password" })
-    ),
-    branches.map(b => React.createElement("div", { key: b.id, style: { marginBottom: 12 } },
-      React.createElement("label", { style: { fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" } }, "🏪 " + b.name + " Password"),
-      React.createElement("input", { type: "text", className: "inp", value: branchPw[b.id] || "", onChange: e => setBranchPw(p => Object.assign({}, p, { [b.id]: e.target.value })), placeholder: b.name + " manager password" })
-    )),
-    saved && React.createElement("div", { style: { background: "#ECFDF5", border: "1px solid #BBF7D0", color: "#059669", padding: "10px 14px", borderRadius: 12, marginTop: 6, marginBottom: 6, fontWeight: 600, fontSize: 12.5 } }, "✅ Passwords saved and synced."),
-    React.createElement("button", { onClick: savePasswords, disabled: saving, className: "btn-primary", style: { width: "100%", padding: "13px", fontSize: 14, marginTop: 8, opacity: saving ? 0.7 : 1 } }, saving ? "Saving..." : "💾 Save Passwords"),
-    React.createElement("button", { onClick: doLogout, className: "btn-secondary", style: { width: "100%", padding: "12px", fontSize: 13, marginTop: 8 } }, "🚪 Sign Out")
+    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27" } }, "👥 Staff Management"),
+      React.createElement("button", { onClick: () => setAdding(v => !v), className: adding ? "btn-secondary" : "btn-primary", style: { padding: "7px 12px", fontSize: 12 } }, adding ? "✕ Cancel" : "➕ Add Manager")),
+    React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Signed in as ", React.createElement("b", null, authEmail || "—")),
+    React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", marginBottom: 14 } }, "Owner-only. Managers you add here get real Firebase accounts scoped to one branch."),
+
+    adding && React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 14, border: "1.5px dashed #BBF7D0", background: "#F8FEF9" } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#059669", marginBottom: 10 } }, "New Branch Manager"),
+      React.createElement("div", { style: { marginBottom: 10 } },
+        React.createElement("label", { style: { fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6 } }, "EMAIL"),
+        React.createElement("input", { className: "inp", type: "email", value: newEmail, onChange: e => setNewEmail(e.target.value), placeholder: "manager@example.com" })),
+      React.createElement("div", { style: { marginBottom: 10 } },
+        React.createElement("label", { style: { fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6 } }, "STARTING PASSWORD"),
+        React.createElement("input", { className: "inp", type: "text", value: newPw, onChange: e => setNewPw(e.target.value), placeholder: "min 6 characters" })),
+      React.createElement("div", { style: { marginBottom: 12 } },
+        React.createElement("label", { style: { fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6 } }, "BRANCH"),
+        React.createElement("select", { className: "inp", value: newBranch, onChange: e => setNewBranch(e.target.value) },
+          branches.map(b => React.createElement("option", { key: b.id, value: b.id }, b.name)))),
+      React.createElement("button", { onClick: addStaff, disabled: busy, className: "btn-green", style: { width: "100%", padding: "12px", fontSize: 13, opacity: busy ? 0.7 : 1 } }, busy ? "Creating..." : "✅ Create Manager")),
+
+    msg && React.createElement("div", { style: { background: "#ECFDF5", border: "1px solid #BBF7D0", color: "#059669", padding: "10px 14px", borderRadius: 12, marginBottom: 10, fontWeight: 600, fontSize: 12.5 } }, msg),
+    err && React.createElement("div", { style: { background: "#FEF2F2", border: "1px solid #FECACA", color: "#DC2626", padding: "10px 14px", borderRadius: 12, marginBottom: 10, fontWeight: 600, fontSize: 12.5 } }, "❌ " + err),
+
+    loading
+      ? React.createElement("div", { style: { color: "#9CA3AF", fontSize: 12, padding: 10 } }, "Loading staff…")
+      : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 } },
+          staff.length === 0
+            ? React.createElement("div", { style: { color: "#9CA3AF", fontSize: 12.5, padding: 10 } }, "No staff yet. Add the first branch manager above.")
+            : staff.map(u => React.createElement("div", { key: u.uid, className: "card", style: { padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 } },
+                React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                  React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#1A1D27", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, u.role === "owner" ? "👑 " : "🏪 ", u.email || u.uid),
+                  React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginTop: 2 } },
+                    u.role === "owner" ? "Owner · Full access" : (branchName(u.branchId) + " manager"))
+                ),
+                React.createElement("div", { style: { display: "flex", gap: 6 } },
+                  React.createElement("button", { onClick: () => resetPw(u.email), disabled: !u.email, title: "Send password reset email", style: { background: "#EFF6FF", border: "none", color: "#2563EB", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700 } }, "🔑"),
+                  u.role !== "owner" && React.createElement("button", { onClick: () => removeStaff(u), title: "Remove role", style: { background: "#FFF1F2", border: "none", color: "#E60000", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700 } }, "🗑️")
+                )
+              ))),
+
+    React.createElement("div", { style: { fontSize: 10.5, color: "#9CA3AF", lineHeight: 1.5, marginBottom: 12 } },
+      "🔑 = send password-reset email · 🗑️ = remove role. Removing a role revokes access; to fully delete the account, also remove them from Firebase Console → Auth → Users."),
+
+    React.createElement("button", { onClick: doLogout, className: "btn-secondary", style: { width: "100%", padding: "12px", fontSize: 13 } }, "🚪 Sign Out")
   );
 }
 
@@ -1529,20 +1596,55 @@ function ReportsTabNew({ orders, branches, scopedBranchId }) {
 }
 
 function App() {
-  const [session, setSession] = React.useState(() => {
-    try { const s = JSON.parse(localStorage.getItem("ba_session") || "null"); if (s && s.role) return s; } catch (e) {}
-    return null;
-  });
-  const loggedIn = !!session;
-  const isOwner = session && session.role === "owner";
-  const branchScope = session && session.role === "branch" ? session.branchId : null;
-  const [selectedAccount, setSelectedAccount] = React.useState("owner");
-  const [password, setPassword] = React.useState("");
-  const [pwErr, setPwErr] = React.useState(false);
-  const [accounts, setAccounts] = React.useState({ ownerPassword: "albahr2024", branchPasswords: { kakkiyah: "kak2024", subhani: "sub2024", waliy: "wal2024" } });
-  const [tab, setTab] = React.useState(() => {
-    try { const s = JSON.parse(localStorage.getItem("ba_session") || "null"); return s && s.role === "owner" ? "home" : "orders"; } catch (e) { return "orders"; }
-  });
+  // ── Firebase Auth session ──
+  const [authReady, setAuthReady] = React.useState(false);
+  const [authUser, setAuthUser]   = React.useState(null);
+  const [profile, setProfile]     = React.useState(null);
+  const [profileLoading, setProfileLoading] = React.useState(false);
+  const loggedIn   = !!(authUser && profile);
+  const isOwner    = profile && profile.role === "owner";
+  const branchScope = profile && profile.role === "branch" ? profile.branchId : null;
+
+  // Login form state
+  const [loginEmail, setLoginEmail] = React.useState("");
+  const [password, setPassword]     = React.useState("");
+  const [pwErr, setPwErr]           = React.useState("");
+  const [busy, setBusy]             = React.useState(false);
+  const [tab, setTab]               = React.useState("orders");
+
+  // Wire the Firebase Auth listener as soon as window.Auth is available.
+  React.useEffect(() => {
+    let unsub = null, cancelled = false;
+    const wire = () => {
+      if (cancelled) return;
+      if (!window.Auth || !window.FB) { setTimeout(wire, 200); return; }
+      unsub = window.Auth.onChange(async (u) => {
+        setAuthReady(true);
+        setAuthUser(u);
+        if (u) {
+          setProfileLoading(true);
+          try {
+            const p = await window.FB.getUserProfile(u.uid);
+            if (p && (p.role === "owner" || p.role === "branch")) {
+              setProfile(p);
+              setTab(p.role === "owner" ? "home" : "orders");
+            } else {
+              // No profile / bad role — reject and sign out
+              setProfile(null);
+              setPwErr("This account has no role. Ask the owner to add you in Staff Management.");
+              try { await window.Auth.signOut(); } catch(_){}
+            }
+          } finally { setProfileLoading(false); }
+        } else {
+          setProfile(null);
+        }
+      });
+      // Clean up any leftover old-login localStorage from the previous scheme
+      try { localStorage.removeItem("ba_session"); } catch(_){}
+    };
+    wire();
+    return () => { cancelled = true; if (unsub) { try { unsub(); } catch(_){} } };
+  }, []);
   const [orders, setOrders] = React.useState([]);
   const [menu, setMenu] = React.useState({
     "🍗 Broast": [
@@ -1662,7 +1764,7 @@ function App() {
   // Firebase listeners
   React.useEffect(() => {
     if (!loggedIn || !selectedBranch) return;
-    let unsubOrders, unsubMenu, unsubCustomers, unsubAccounts;
+    let unsubOrders, unsubMenu, unsubCustomers;
     let cancelled = false;
     // Wait for window.FB to be ready (Firebase loads async)
     const waitForFB = (attempts) => {
@@ -1681,23 +1783,6 @@ function App() {
         if (fbMenu) setMenu(fbMenu);
         unsubMenu = window.FB.onMenuChange(m => { if (m) setMenu(m); });
         unsubCustomers = window.FB.onCustomersChange(c => setCustomers(c));
-        if (window.FB.getAccounts) {
-          try {
-            const fbAcc = await window.FB.getAccounts();
-            if (fbAcc) setAccounts(prev => ({
-              ownerPassword: fbAcc.ownerPassword || prev.ownerPassword,
-              branchPasswords: Object.assign({}, prev.branchPasswords, fbAcc.branchPasswords || {}),
-            }));
-          } catch(e) {}
-        }
-        if (window.FB.onAccountsChange) {
-          try {
-            unsubAccounts = window.FB.onAccountsChange(a => setAccounts(prev => ({
-              ownerPassword: a.ownerPassword || prev.ownerPassword,
-              branchPasswords: Object.assign({}, prev.branchPasswords, a.branchPasswords || {}),
-            })));
-          } catch(e) {}
-        }
         unsubOrders = window.FB.onOrdersChange(fbOrders => {
           // Deduplicate by fbId to prevent double orders
           const seen = new Set();
@@ -1738,7 +1823,7 @@ function App() {
     })();
     }; // end startListeners
     waitForFB(20); // try up to 20 times (6 seconds)
-    return () => { cancelled = true; if(unsubOrders)unsubOrders(); if(unsubMenu)unsubMenu(); if(unsubCustomers)unsubCustomers(); if(unsubAccounts)unsubAccounts(); };
+    return () => { cancelled = true; if(unsubOrders)unsubOrders(); if(unsubMenu)unsubMenu(); if(unsubCustomers)unsubCustomers(); };
   }, [loggedIn, selectedBranch]);
 
   const handleStatusChange = async (orderNo, next) => {
@@ -1794,62 +1879,79 @@ function App() {
     if (!tabs.find(t => t.id === tab)) setTab(isOwner ? "home" : "orders");
   }, [loggedIn, isOwner, tab]);
 
-  const doLogin = () => {
-    if (selectedAccount === "owner") {
-      if (password !== accounts.ownerPassword) { setPwErr(true); return; }
-      const s = { role: "owner", branchId: null, at: Date.now() };
-      localStorage.setItem("ba_session", JSON.stringify(s)); setSession(s); setPassword(""); setPwErr(false); setTab("home");
-    } else {
-      const bp = accounts.branchPasswords[selectedAccount];
-      if (!bp || password !== bp) { setPwErr(true); return; }
-      const s = { role: "branch", branchId: selectedAccount, at: Date.now() };
-      localStorage.setItem("ba_session", JSON.stringify(s)); setSession(s); setPassword(""); setPwErr(false); setTab("orders");
-    }
+  const doLogin = async () => {
+    if (!window.Auth) { setPwErr("Sign-in service not loaded yet. Try again in a moment."); return; }
+    const email = loginEmail.trim();
+    if (!email || !password) { setPwErr("Enter email and password."); return; }
+    setBusy(true); setPwErr("");
+    try {
+      await window.Auth.signIn(email, password);
+      setPassword("");
+      // onAuthStateChanged handler loads profile + navigates.
+    } catch(e) {
+      const code = (e && e.code) || "";
+      if (code === "auth/invalid-credential" || code === "auth/wrong-password" || code === "auth/user-not-found" || code === "auth/invalid-email") {
+        setPwErr("Wrong email or password.");
+      } else if (code === "auth/too-many-requests") {
+        setPwErr("Too many attempts. Wait a minute and try again.");
+      } else if (code === "auth/network-request-failed") {
+        setPwErr("Network error. Check your connection.");
+      } else {
+        setPwErr(e && e.message ? e.message : "Sign-in failed.");
+      }
+    } finally { setBusy(false); }
   };
-  const doLogout = () => { localStorage.removeItem("ba_session"); setSession(null); setSelectedBranch(null); setOrders([]); setTab("orders"); };
+  const doLogout = async () => {
+    if (window.Auth) { try { await window.Auth.signOut(); } catch(_){} }
+    setProfile(null); setAuthUser(null); setSelectedBranch(null); setOrders([]); setTab("orders");
+    setLoginEmail(""); setPassword("");
+  };
 
-  // Login screen (role + password)
+  // Login screen (Firebase Auth — email + password)
   if (!loggedIn) {
-    const accountOptions = [
-      { id: "owner", label: "Owner", sub: "Full access · all branches", icon: "👑", color: "#E60000" },
-    ].concat(BRANCHES.map(b => ({ id: b.id, label: b.name + " Branch", sub: "Branch manager · " + b.nameAr, icon: "🏪", color: "#2563EB" })));
+    const authBooting = !authReady || profileLoading;
+    const doReset = async () => {
+      const email = loginEmail.trim();
+      if (!email) { setPwErr("Enter your email first, then tap Forgot password."); return; }
+      if (!window.Auth) { setPwErr("Sign-in service not loaded yet."); return; }
+      try { await window.Auth.reset(email); setPwErr(""); alert("Password reset email sent to " + email + " (check spam)."); }
+      catch(e) { setPwErr((e && e.code === "auth/user-not-found") ? "No account with that email." : (e && e.message) || "Could not send reset email."); }
+    };
     return React.createElement("div", { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(160deg,#FFF1F2 0%,#F7F8FC 50%,#EFF6FF 100%)", padding: 24 } },
-      React.createElement("div", { style: { width: "100%", maxWidth: 420, textAlign: "center" } },
-        React.createElement("div", { style: { marginBottom: 24 } },
-          React.createElement("div", { style: { width: 78, height: 78, borderRadius: 22, overflow: "hidden", margin: "0 auto 14px", border: "3px solid #E60000", boxShadow: "0 8px 32px rgba(230,0,0,0.2)" } },
+      React.createElement("div", { style: { width: "100%", maxWidth: 380, textAlign: "center" } },
+        React.createElement("div", { style: { marginBottom: 28 } },
+          React.createElement("div", { style: { width: 82, height: 82, borderRadius: 24, overflow: "hidden", margin: "0 auto 14px", border: "3px solid #E60000", boxShadow: "0 8px 32px rgba(230,0,0,0.2)" } },
             React.createElement("img", { src: window.LOGO_SRC, style: { width: "100%", height: "100%", objectFit: "cover" } })
           ),
           React.createElement("div", { style: { fontFamily: "'Sora',sans-serif", fontWeight: 800, fontSize: 22, color: "#1A1D27", letterSpacing: "-0.5px" } }, "Broast Albahr"),
           React.createElement("div", { style: { color: "#6B7280", fontSize: 13, marginTop: 6, fontWeight: 500 } }, "Admin Dashboard")
         ),
-        React.createElement("div", { className: "card shadow-sm", style: { padding: 22 } },
-          React.createElement("div", { style: { fontSize: 12, color: "#6B7280", fontWeight: 700, textAlign: "left", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.5px" } }, "Sign in as"),
-          React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 } },
-            accountOptions.map(opt => React.createElement("button", {
-              key: opt.id, onClick: () => { setSelectedAccount(opt.id); setPwErr(false); },
-              style: { display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 14, border: "1.5px solid " + (selectedAccount === opt.id ? opt.color : "#EAECF2"), background: selectedAccount === opt.id ? (opt.color + "0F") : "#fff", cursor: "pointer", textAlign: "left", transition: "all 0.15s" }
-            },
-              React.createElement("div", { style: { width: 38, height: 38, borderRadius: 11, background: opt.color + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 } }, opt.icon),
-              React.createElement("div", { style: { flex: 1, minWidth: 0 } },
-                React.createElement("div", { style: { fontWeight: 700, fontSize: 13.5, color: "#1A1D27" } }, opt.label),
-                React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginTop: 1 } }, opt.sub)
-              ),
-              selectedAccount === opt.id && React.createElement("span", { style: { color: opt.color, fontWeight: 800 } }, "✓")
-            ))
-          ),
+        React.createElement("div", { className: "card shadow-sm", style: { padding: 24 } },
           React.createElement("div", { style: { marginBottom: 14, textAlign: "left" } },
-            React.createElement("label", { style: { fontSize: 12, color: "#6B7280", fontWeight: 600, display: "block", marginBottom: 8 } }, "PASSWORD"),
+            React.createElement("label", { style: { fontSize: 12, color: "#6B7280", fontWeight: 600, display: "block", marginBottom: 8 } }, "EMAIL"),
             React.createElement("input", {
-              type: "password", value: password, autoFocus: true,
-              onChange: e => { setPassword(e.target.value); setPwErr(false); },
+              type: "email", value: loginEmail, autoFocus: true, autoComplete: "email",
+              onChange: e => { setLoginEmail(e.target.value); setPwErr(""); },
               onKeyDown: e => e.key === "Enter" && doLogin(),
-              placeholder: "Enter password", className: "inp",
-              style: { textAlign: "center", letterSpacing: 4, fontSize: 16, padding: "14px 18px", border: pwErr ? "1.5px solid #E60000" : undefined }
+              placeholder: "you@example.com", className: "inp",
+              style: { fontSize: 14, padding: "13px 14px" }
             })
           ),
-          pwErr && React.createElement("div", { style: { color: "#E60000", fontSize: 12, marginBottom: 12, textAlign: "left" } }, "❌ Wrong password"),
-          React.createElement("button", { onClick: doLogin, className: "btn-primary", style: { width: "100%", padding: "15px", fontSize: 15 } }, "Sign In →")
-        )
+          React.createElement("div", { style: { marginBottom: 12, textAlign: "left" } },
+            React.createElement("label", { style: { fontSize: 12, color: "#6B7280", fontWeight: 600, display: "block", marginBottom: 8 } }, "PASSWORD"),
+            React.createElement("input", {
+              type: "password", value: password, autoComplete: "current-password",
+              onChange: e => { setPassword(e.target.value); setPwErr(""); },
+              onKeyDown: e => e.key === "Enter" && doLogin(),
+              placeholder: "Enter your password", className: "inp",
+              style: { fontSize: 14, padding: "13px 14px", border: pwErr ? "1.5px solid #E60000" : undefined }
+            })
+          ),
+          pwErr && React.createElement("div", { style: { color: "#E60000", fontSize: 12, marginBottom: 10, textAlign: "left" } }, "❌ " + pwErr),
+          React.createElement("button", { onClick: doLogin, disabled: busy || authBooting, className: "btn-primary", style: { width: "100%", padding: "14px", fontSize: 15, marginTop: 4, opacity: (busy || authBooting) ? 0.6 : 1 } }, busy ? "Signing in..." : (authBooting ? "Loading..." : "Sign In →")),
+          React.createElement("button", { onClick: doReset, disabled: busy, style: { display: "block", margin: "12px auto 0", background: "none", border: "none", color: "#6B7280", cursor: "pointer", fontSize: 12, fontWeight: 600 } }, "Forgot password?")
+        ),
+        !window.Auth && React.createElement("div", { style: { marginTop: 14, fontSize: 11, color: "#9CA3AF" } }, "Loading Firebase Auth…")
       )
     );
   }
@@ -1969,7 +2071,7 @@ function App() {
       tab === "menu" && isOwner && React.createElement(MenuTabNew, { menu: menu, setMenu: updateMenu }),
       tab === "coupons" && isOwner && React.createElement(CouponsTabNew, null),
       tab === "customers" && React.createElement(CustomersTabNew, { customers: customers }),
-      tab === "settings" && React.createElement(SettingsTabNew, { isOwner: isOwner, accounts: accounts, setAccounts: setAccounts, branches: BRANCHES, doLogout: doLogout })
+      tab === "settings" && React.createElement(SettingsTabNew, { isOwner: isOwner, branches: BRANCHES, doLogout: doLogout, authEmail: authUser && authUser.email })
     ),
 
     // Bottom navigation
@@ -2003,18 +2105,46 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       alert(msg);
     };
     try {
-      var { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
-      var { getFirestore, doc, getDoc, setDoc, addDoc, collection, onSnapshot, updateDoc, serverTimestamp, getDocs }
+      var { initializeApp, deleteApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+      var { getFirestore, doc, getDoc, setDoc, addDoc, collection, onSnapshot, updateDoc, deleteDoc, serverTimestamp, getDocs, query, where }
         = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
-      var _app = initializeApp({
+      var { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword, sendPasswordResetEmail, updatePassword }
+        = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+      var _fbConfig = {
         apiKey: "AIzaSyB2PqybuRwuBjDQHgl1r9iFOC5b51r81-s",
         authDomain: "broast-al-bahr.firebaseapp.com",
         projectId: "broast-al-bahr",
         storageBucket: "broast-al-bahr.firebasestorage.app",
         messagingSenderId: "663849043584",
         appId: "1:663849043584:web:b15e0a32eb9b6353830865"
-      });
+      };
+      var _app = initializeApp(_fbConfig);
       var _db = getFirestore(_app);
+      var _auth = getAuth(_app);
+      window.Auth = {
+        signIn: function(email, pw){ return signInWithEmailAndPassword(_auth, email, pw); },
+        signOut: function(){ return signOut(_auth); },
+        onChange: function(cb){ return onAuthStateChanged(_auth, cb); },
+        reset: function(email){ return sendPasswordResetEmail(_auth, email); },
+        current: function(){ return _auth.currentUser; },
+        // Create a new staff Firebase Auth user without signing the owner out.
+        // Uses a secondary Firebase app instance for isolation.
+        createStaff: async function(email, pw, profile){
+          var name = "secondary_" + Date.now();
+          var sec = initializeApp(_fbConfig, name);
+          var secAuth = getAuth(sec);
+          try {
+            var cred = await createUserWithEmailAndPassword(secAuth, email, pw);
+            await setDoc(doc(_db, "users", cred.user.uid), Object.assign({}, profile, { email: email, createdAt: serverTimestamp() }));
+            await signOut(secAuth);
+            try { await deleteApp(sec); } catch(_){}
+            return { ok: true, uid: cred.user.uid };
+          } catch(e) {
+            try { await signOut(secAuth); await deleteApp(sec); } catch(_){}
+            return { ok: false, error: (e && e.code) || (e && e.message) || "error" };
+          }
+        },
+      };
       window.FB = {
         getMenu: async function(){ try{ var s=await getDoc(doc(_db,"settings","menu")); return s.exists()?s.data().menu:null; }catch(e){ return null; } },
         saveMenu: async function(m){ try{ await setDoc(doc(_db,"settings","menu"),{menu:m,updatedAt:serverTimestamp()}); return true; }catch(e){ window.__fbErr("menu",e); return false; } },
@@ -2031,6 +2161,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         onSettingsChange: function(cb){ return onSnapshot(doc(_db,"settings","restaurant"),function(s){ if(s.exists())cb(s.data()); }); },
         onOrdersChange: function(cb){ return onSnapshot(collection(_db,"orders"),function(s){ var o=s.docs.map(function(d){ return Object.assign({fbId:d.id},d.data()); }); o.sort(function(a,b){ return ((b.createdAt&&b.createdAt.seconds)||0)-((a.createdAt&&a.createdAt.seconds)||0); }); cb(o); }); },
         onCustomersChange: function(cb){ return onSnapshot(collection(_db,"customers"),function(s){ cb(s.docs.map(function(d){ return Object.assign({id:d.id},d.data()); })); }); },
+        getUserProfile: async function(uid){ try{ var s=await getDoc(doc(_db,"users",uid)); return s.exists()?s.data():null; }catch(e){ return null; } },
+        listStaff: async function(){ try{ var snap=await getDocs(collection(_db,"users")); return snap.docs.map(function(d){ return Object.assign({uid:d.id},d.data()); }); }catch(e){ return []; } },
+        deleteStaff: async function(uid){ try{ await deleteDoc(doc(_db,"users",uid)); return true; }catch(e){ window.__fbErr("staff",e); return false; } },
+        updateStaffProfile: async function(uid, patch){ try{ await updateDoc(doc(_db,"users",uid),Object.assign({},patch,{updatedAt:serverTimestamp()})); return true; }catch(e){ window.__fbErr("staff",e); return false; } },
       };
       console.log("Firebase ready ✅");
     } catch(e) { console.log("Firebase unavailable:", e.message); }
