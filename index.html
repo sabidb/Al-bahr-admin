@@ -1282,6 +1282,12 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     }
   </script>
   <script type="module">
+    window.__fbErr = function(what, e){
+      console.error("Save failed ("+what+"):", e);
+      var msg = "⚠️ Could not save "+what+". Check your internet connection and try again.";
+      try{ if(window.__toast){ window.__toast(msg); return; } }catch(_){}
+      alert(msg);
+    };
     try {
       var { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
       var { getFirestore, doc, getDoc, setDoc, addDoc, collection, onSnapshot, updateDoc, serverTimestamp, getDocs }
@@ -1297,11 +1303,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var _db = getFirestore(_app);
       window.FB = {
         getMenu: async function(){ try{ var s=await getDoc(doc(_db,"settings","menu")); return s.exists()?s.data().menu:null; }catch(e){ return null; } },
-        saveMenu: async function(m){ try{ await setDoc(doc(_db,"settings","menu"),{menu:m,updatedAt:serverTimestamp()}); }catch(e){} },
+        saveMenu: async function(m){ try{ await setDoc(doc(_db,"settings","menu"),{menu:m,updatedAt:serverTimestamp()}); return true; }catch(e){ window.__fbErr("menu",e); return false; } },
         getSettings: async function(){ try{ var s=await getDoc(doc(_db,"settings","restaurant")); return s.exists()?s.data():{isOpen:true}; }catch(e){ return {isOpen:true}; } },
-        saveSettings: async function(d){ try{ await setDoc(doc(_db,"settings","restaurant"),Object.assign({},d,{updatedAt:serverTimestamp()})); }catch(e){} },
-        saveOrder: async function(o){ try{ await addDoc(collection(_db,"orders"),Object.assign({},o,{createdAt:serverTimestamp(),status:"new"})); }catch(e){} },
-        updateOrderStatus: async function(id,s){ try{ await updateDoc(doc(_db,"orders",id),{status:s,updatedAt:serverTimestamp()}); }catch(e){} },
+        saveSettings: async function(d){ try{ await setDoc(doc(_db,"settings","restaurant"),Object.assign({},d,{updatedAt:serverTimestamp()})); return true; }catch(e){ window.__fbErr("settings",e); return false; } },
+        saveOrder: async function(o){ try{ await addDoc(collection(_db,"orders"),Object.assign({},o,{createdAt:serverTimestamp(),status:"new"})); return true; }catch(e){ window.__fbErr("order",e); return false; } },
+        updateOrderStatus: async function(id,s){ try{ await updateDoc(doc(_db,"orders",id),{status:s,updatedAt:serverTimestamp()}); return true; }catch(e){ window.__fbErr("order status",e); return false; } },
         saveCustomer: async function(d){ try{ await setDoc(doc(_db,"customers",d.phone),Object.assign({},d,{lastSeen:serverTimestamp()}),{merge:true}); }catch(e){} },
         getCustomerOrders: async function(ph){ try{ var snap=await getDocs(collection(_db,"orders")); return snap.docs.map(function(d){ return Object.assign({fbId:d.id},d.data()); }).filter(function(o){ return o.userPhone===ph; }).sort(function(a,b){ return ((b.createdAt&&b.createdAt.seconds)||0)-((a.createdAt&&a.createdAt.seconds)||0); }); }catch(e){ return []; } },
         onMenuChange: function(cb){ return onSnapshot(doc(_db,"settings","menu"),function(s){ if(s.exists())cb(s.data().menu); }); },
