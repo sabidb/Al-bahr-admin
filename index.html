@@ -63,6 +63,11 @@ const ADMIN_STYLES = `
   .divider { height: 1px; background: #EAECF2; margin: 14px 0; }
   .metric-num { font-family: 'Sora', sans-serif; font-weight: 800; }
   .mono { font-family: 'DM Mono', monospace; }
+  .section-title { font-family: 'Sora',sans-serif; font-weight: 700; font-size: 14px; color: #1A1D27; }
+  .pchip { display: inline-flex; align-items: center; gap: 5px; border-radius: 20px; padding: 4px 10px; font-size: 11px; font-weight: 700; border: 1px solid; white-space: nowrap; }
+  .branch-select { border: 1.5px solid #EAECF2; background: #F7F8FC; color: #1A1D27; border-radius: 12px; padding: 7px 30px 7px 12px; font-size: 12px; font-weight: 700; cursor: pointer; outline: none; appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B7280' stroke-width='3'><path d='M6 9l6 6 6-6'/></svg>"); background-repeat: no-repeat; background-position: right 10px center; }
+  @keyframes toast-in { from{transform:translateY(-14px);opacity:0} to{transform:translateY(0);opacity:1} }
+  .bottom-nav { position: fixed; bottom: 12px; left: 12px; right: 12px; background: rgba(255,255,255,0.96); backdrop-filter: blur(20px); border: 1px solid #EAECF2; border-radius: 22px; padding: 10px 6px; display: flex; justify-content: space-around; z-index: 200; box-shadow: 0 -2px 20px rgba(26,29,39,0.1); padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
 `;
 
 // ── TOGGLE COMPONENT ──
@@ -821,10 +826,10 @@ function AnalyticsTabNew({ orders }) {
     // 30-day chart
     React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 16 } },
       React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } },
-        React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#FFC400" } }, "📈 Last 30 Days"),
+        React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27" } }, "📈 Last 30 Days"),
         React.createElement("div", { style: { display: "flex", gap: 6 } },
-          React.createElement("button", { onClick: () => setChartMode("revenue"), style: { padding: "6px 12px", borderRadius: 20, border: "none", background: chartMode === "revenue" ? "#E60000" : "rgba(255,255,255,0.05)", color: chartMode === "revenue" ? "#fff" : "#6B7280", fontSize: 11, fontWeight: 600, cursor: "pointer" } }, "Revenue"),
-          React.createElement("button", { onClick: () => setChartMode("orders"), style: { padding: "6px 12px", borderRadius: 20, border: "none", background: chartMode === "orders" ? "#E60000" : "rgba(255,255,255,0.05)", color: chartMode === "orders" ? "#fff" : "#6B7280", fontSize: 11, fontWeight: 600, cursor: "pointer" } }, "Orders")
+          React.createElement("button", { onClick: () => setChartMode("revenue"), style: { padding: "6px 12px", borderRadius: 20, border: "none", background: chartMode === "revenue" ? "#E60000" : "#F4F5F9", color: chartMode === "revenue" ? "#fff" : "#6B7280", fontSize: 11, fontWeight: 600, cursor: "pointer" } }, "Revenue"),
+          React.createElement("button", { onClick: () => setChartMode("orders"), style: { padding: "6px 12px", borderRadius: 20, border: "none", background: chartMode === "orders" ? "#E60000" : "#F4F5F9", color: chartMode === "orders" ? "#fff" : "#6B7280", fontSize: 11, fontWeight: 600, cursor: "pointer" } }, "Orders")
         )
       ),
       // Bar chart
@@ -844,7 +849,7 @@ function AnalyticsTabNew({ orders }) {
 
     // Top items
     topItems.length > 0 && React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 16 } },
-      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#FFC400", marginBottom: 14 } }, "🔥 Top Items"),
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 14 } }, "🔥 Top Items"),
       topItems.map(([name, count], i) =>
         React.createElement("div", { key: name, style: { display: "flex", alignItems: "center", gap: 12, marginBottom: 12 } },
           React.createElement("div", { style: { width: 28, height: 28, borderRadius: 8, background: i === 0 ? "linear-gradient(135deg,#E60000,#FF4500)" : "linear-gradient(135deg,#374151,#1F2937)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, color: "#fff", flexShrink: 0 } }, i + 1),
@@ -861,7 +866,7 @@ function AnalyticsTabNew({ orders }) {
 
     // Branch breakdown
     Object.keys(branches).length > 0 && React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 16 } },
-      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#FFC400", marginBottom: 14 } }, "🏪 Orders by Branch"),
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 14 } }, "🏪 Orders by Branch"),
       Object.entries(branches).map(([branch, count]) =>
         React.createElement("div", { key: branch, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid #F3F4F6", fontSize: 13 } },
           React.createElement("span", { style: { color: "#6B7280" } }, branch === "kakkiyah" ? "🏪 Kakkiyah" : branch === "subhani" ? "🏪 Subhani" : branch === "waliy" ? "🏪 Waliy Al Ahd" : branch),
@@ -872,7 +877,7 @@ function AnalyticsTabNew({ orders }) {
 
     // Payment breakdown
     Object.keys(payments).length > 0 && React.createElement("div", { className: "card", style: { padding: 18 } },
-      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#FFC400", marginBottom: 14 } }, "💳 Payment Methods"),
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 14 } }, "💳 Payment Methods"),
       Object.entries(payments).map(([method, count]) =>
         React.createElement("div", { key: method, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid #F3F4F6", fontSize: 13 } },
           React.createElement("span", { style: { color: "#6B7280", textTransform: "capitalize" } }, method),
@@ -992,13 +997,62 @@ function App() {
   const [orderFilter, setOrderFilter] = React.useState("all");
   const [fbConnected, setFbConnected] = React.useState(false);
   const [bellAnim, setBellAnim] = React.useState(false);
-  const ADMIN_PASSWORD = "albahr2024";
   const BRANCHES = [
     { id: "kakkiyah", name: "Kakkiyah", nameAr: "الكعكية", phone: "0500959394" },
     { id: "subhani", name: "Subhani", nameAr: "الصبحاني", phone: "0508379339" },
     { id: "waliy", name: "Waliy Al Ahd", nameAr: "ولي العهد", phone: "0550061771" },
   ];
+  // ── LOGIN CODES ────────────────────────────────────────────
+  // Owner sees ALL branches. Each branch code is locked to only that
+  // branch's incoming orders. Change these codes anytime — keep them secret.
+  const ACCOUNTS = {
+    "albahr2024":   { role: "owner",  branch: "all",      label: "Owner" },
+    "kakkiyah2024": { role: "branch", branch: "kakkiyah", label: "Kakkiyah" },
+    "subhani2024":  { role: "branch", branch: "subhani",  label: "Subhani" },
+    "waliy2024":    { role: "branch", branch: "waliy",    label: "Waliy Al Ahd" },
+  };
+  const [role, setRole] = React.useState(null); // "owner" | "branch"
   const [selectedBranch, setSelectedBranch] = React.useState(null);
+  const [printerState, setPrinterState] = React.useState("connecting"); // connecting | connected | offline
+  const [printerName, setPrinterName] = React.useState("");
+
+  const applyBranchFilter = (b) => {
+    setSelectedBranch(b);
+    if (window.ThermalPrint) { window.ThermalPrint.setPrinterName("PP9000EU"); window.ThermalPrint.setBranchFilter(b); }
+  };
+
+  const doLogin = (code) => {
+    const acct = ACCOUNTS[(code || "").trim()];
+    if (!acct) { setPwErr(true); return; }
+    setRole(acct.role);
+    setLoggedIn(true);
+    setPassword("");
+    setPwErr(false);
+    applyBranchFilter(acct.branch);
+  };
+
+  const doLogout = () => { setLoggedIn(false); setRole(null); setSelectedBranch(null); setOrders([]); };
+
+  // Listen for printer status from the QZ Tray module (no floating bar)
+  React.useEffect(() => {
+    const onStatus = (e) => {
+      if (!e.detail) return;
+      setPrinterState(e.detail.state);
+      if (e.detail.printer) setPrinterName(e.detail.printer);
+    };
+    window.addEventListener("qz-status", onStatus);
+    if (window.__qzState) { setPrinterState(window.__qzState.state); setPrinterName(window.__qzState.printer || ""); }
+    return () => window.removeEventListener("qz-status", onStatus);
+  }, []);
+
+  // Inject premium styles globally so the login/branch screens are styled too
+  React.useEffect(() => {
+    if (document.getElementById("admin-styles")) return;
+    var el = document.createElement("style");
+    el.id = "admin-styles";
+    el.textContent = ADMIN_STYLES;
+    document.head.appendChild(el);
+  }, []);
 
   // Firebase listeners
   React.useEffect(() => {
@@ -1122,65 +1176,24 @@ function App() {
       ),
       React.createElement("div", { className: "card shadow-sm", style: { padding: 28 } },
         React.createElement("div", { style: { marginBottom: 18, textAlign: "left" } },
-          React.createElement("label", { style: { fontSize: 12, color: "#6B7280", fontWeight: 600, display: "block", marginBottom: 8 } }, "PASSWORD"),
+          React.createElement("label", { style: { fontSize: 12, color: "#6B7280", fontWeight: 600, display: "block", marginBottom: 8 } }, "ACCESS CODE"),
           React.createElement("input", {
             type: "password", value: password,
             onChange: e => { setPassword(e.target.value); setPwErr(false); },
-            onKeyDown: e => e.key === "Enter" && (password === ADMIN_PASSWORD ? (setLoggedIn(true), setPassword("")) : setPwErr(true)),
-            placeholder: "Enter your password",
+            onKeyDown: e => { if (e.key === "Enter") doLogin(password); },
+            placeholder: "Enter your access code",
             className: "inp",
             style: { textAlign: "center", letterSpacing: 4, fontSize: 16, padding: "16px 18px", border: pwErr ? "1.5px solid #E60000" : undefined }
           })
         ),
-        pwErr && React.createElement("div", { style: { color: "#E60000", fontSize: 12, marginBottom: 12, textAlign: "left" } }, "❌ Wrong password"),
+        pwErr && React.createElement("div", { style: { color: "#E60000", fontSize: 12, marginBottom: 12, textAlign: "left" } }, "❌ Wrong code — check with the owner"),
         React.createElement("button", {
-          onClick: () => password === ADMIN_PASSWORD ? (setLoggedIn(true), setPassword("")) : setPwErr(true),
+          onClick: () => doLogin(password),
           className: "btn-primary",
           style: { width: "100%", padding: "16px", fontSize: 15 }
-        }, "Sign In →")
+        }, "Sign In →"),
+        React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", marginTop: 14, lineHeight: 1.5 } }, "Each branch has its own code and sees only its own orders. The owner code sees every branch.")
       )
-    )
-  );
-
-  // Branch selection screen
-  if (loggedIn && !selectedBranch) return React.createElement("div", { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(160deg,#FFF1F2 0%,#F7F8FC 50%,#EFF6FF 100%)", padding: 24 } },
-    React.createElement("div", { style: { width: "100%", maxWidth: 420 } },
-      React.createElement("div", { style: { textAlign: "center", marginBottom: 28 } },
-        React.createElement("div", { style: { width: 72, height: 72, borderRadius: 20, overflow: "hidden", margin: "0 auto 14px", border: "2.5px solid #E60000", boxShadow: "0 8px 24px rgba(230,0,0,0.15)" } },
-          React.createElement("img", { src: window.LOGO_SRC, style: { width: "100%", height: "100%", objectFit: "cover" } })
-        ),
-        React.createElement("div", { style: { fontFamily: "'Sora',sans-serif", fontWeight: 800, fontSize: 20, color: "#1A1D27" } }, "Select Branch"),
-        React.createElement("div", { style: { color: "#6B7280", fontSize: 13, marginTop: 6 } }, "Which branch are you managing?")
-      ),
-      React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
-        BRANCHES.map(function(b) {
-          return React.createElement("button", {
-            key: b.id,
-            onClick: function() { setSelectedBranch(b.id); if(window.ThermalPrint) { window.ThermalPrint.setPrinterName("PP9000EU"); window.ThermalPrint.setBranchFilter(b.id); } },
-            className: "card",
-            style: { padding: "18px 20px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", border: "1.5px solid #EAECF2", background: "#fff" },
-            onMouseOver: function(e) { e.currentTarget.style.borderColor = "#E60000"; e.currentTarget.style.background = "#FFF1F2"; },
-            onMouseOut: function(e) { e.currentTarget.style.borderColor = "#EAECF2"; e.currentTarget.style.background = "#fff"; }
-          },
-            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 14, textAlign: "left" } },
-              React.createElement("div", { style: { width: 44, height: 44, borderRadius: 13, background: "#FFF1F2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 } }, "🏪"),
-              React.createElement("div", null,
-                React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: "#1A1D27" } }, b.name),
-                React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 2 } }, b.nameAr + " · " + b.phone)
-              )
-            ),
-            React.createElement("span", { style: { color: "#E60000", fontSize: 18, fontWeight: 700 } }, "→")
-          );
-        }),
-        React.createElement("button", {
-          onClick: function() { setSelectedBranch("all"); if(window.ThermalPrint) window.ThermalPrint.setBranchFilter("all"); },
-          style: { background: "#F4F5F9", border: "1.5px solid #EAECF2", borderRadius: 16, padding: "14px 20px", cursor: "pointer", color: "#6B7280", fontSize: 13, fontWeight: 600, textAlign: "center" }
-        }, "📊 All Branches · Owner View")
-      ),
-      React.createElement("button", {
-        onClick: function() { setLoggedIn(false); },
-        style: { display: "block", margin: "20px auto 0", background: "none", border: "none", color: "#9CA3AF", cursor: "pointer", fontSize: 12 }
-      }, "← Back")
     )
   );
 
@@ -1196,24 +1209,52 @@ function App() {
         ),
         React.createElement("div", null,
           React.createElement("div", { style: { fontFamily: "'Sora',sans-serif", fontWeight: 800, fontSize: 14, color: "#1A1D27", letterSpacing: "-0.3px" } }, "Broast Albahr"),
-          React.createElement("div", { style: { fontSize: 10, color: "#6B7280", fontWeight: 500 } },
-            selectedBranch === "all" ? "All Branches" :
-            selectedBranch === "kakkiyah" ? "🏪 Kakkiyah" :
-            selectedBranch === "subhani" ? "🏪 Subhani" :
-            selectedBranch === "waliy" ? "🏪 Waliy Al Ahd" : "Admin"
+          React.createElement("div", { style: { fontSize: 10, color: "#6B7280", fontWeight: 600, display: "flex", alignItems: "center", gap: 5 } },
+            role === "owner"
+              ? React.createElement(React.Fragment, null,
+                  React.createElement("span", { style: { background: "#7C3AED", color: "#fff", borderRadius: 6, padding: "1px 6px", fontSize: 9, fontWeight: 800, letterSpacing: "0.5px" } }, "OWNER"),
+                  React.createElement("span", null, "Dashboard")
+                )
+              : React.createElement("span", null, "🏪 " + ((BRANCHES.find(b => b.id === selectedBranch) || {}).name || selectedBranch))
           )
         )
       ),
-      React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
-        fbConnected && React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 5, background: "#ECFDF5", border: "1px solid #BBF7D0", borderRadius: 20, padding: "4px 10px" } },
-          React.createElement("div", { style: { width: 6, height: 6, borderRadius: "50%", background: "#059669", animation: "live-breathe 2s infinite" } }),
-          React.createElement("span", { style: { fontSize: 11, color: "#059669", fontWeight: 700 } }, "LIVE")
+      React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, flexShrink: 0 } },
+        // Printer status chip
+        React.createElement("div", {
+          className: "pchip",
+          title: printerName ? "Printer: " + printerName + " — " + printerState : "Thermal printer status",
+          style: printerState === "connected"
+            ? { background: "#ECFDF5", borderColor: "#BBF7D0", color: "#059669" }
+            : printerState === "offline"
+              ? { background: "#FFF1F2", borderColor: "#FECACA", color: "#E60000" }
+              : { background: "#FFFBEB", borderColor: "#FDE68A", color: "#D97706" }
+        },
+          React.createElement("span", null, "🖨️"),
+          React.createElement("span", null, printerState === "connected" ? "On" : printerState === "offline" ? "Off" : "…")
         ),
-        newCount > 0 && React.createElement("div", { style: { background: "#E60000", borderRadius: 20, padding: "4px 10px", fontSize: 11, fontWeight: 700, color: "#fff", animation: "pulse-red 2s infinite" } },
+        fbConnected && React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, background: "#ECFDF5", border: "1px solid #BBF7D0", borderRadius: 20, padding: "4px 8px" } },
+          React.createElement("div", { style: { width: 6, height: 6, borderRadius: "50%", background: "#059669", animation: "live-breathe 2s infinite" } }),
+          React.createElement("span", { style: { fontSize: 10, color: "#059669", fontWeight: 800 } }, "LIVE")
+        ),
+        newCount > 0 && React.createElement("div", { style: { background: "#E60000", borderRadius: 20, padding: "4px 8px", fontSize: 11, fontWeight: 700, color: "#fff", animation: "pulse-red 2s infinite" } },
           "🔔 " + newCount
         ),
-        React.createElement("button", { onClick: () => { setSelectedBranch(null); setOrders([]); }, style: { background: "#FFF7ED", border: "1px solid #FED7AA", color: "#EA580C", padding: "6px 10px", borderRadius: 10, cursor: "pointer", fontSize: 11, fontWeight: 700 } }, "🏪"),
-        React.createElement("button", { onClick: () => { setLoggedIn(false); setSelectedBranch(null); setOrders([]); }, style: { background: "#FFF1F2", border: "1px solid #FECACA", color: "#E60000", padding: "6px 10px", borderRadius: 10, cursor: "pointer", fontSize: 11, fontWeight: 700 } }, "✕")
+        React.createElement("button", { onClick: doLogout, title: "Log out", style: { background: "#FFF1F2", border: "1px solid #FECACA", color: "#E60000", padding: "6px 9px", borderRadius: 10, cursor: "pointer", fontSize: 11, fontWeight: 700 } }, "✕")
+      )
+    ),
+
+    // Owner branch switcher toolbar (owner only)
+    role === "owner" && React.createElement("div", { style: { position: "sticky", top: 61, zIndex: 90, background: "rgba(247,248,252,0.94)", backdropFilter: "blur(12px)", borderBottom: "1px solid #EAECF2", padding: "8px 14px", display: "flex", alignItems: "center", gap: 10 } },
+      React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.5px" } }, "Viewing"),
+      React.createElement("select", {
+        className: "branch-select",
+        style: { flex: 1 },
+        value: selectedBranch,
+        onChange: e => applyBranchFilter(e.target.value)
+      },
+        React.createElement("option", { value: "all" }, "📊 All Branches"),
+        BRANCHES.map(b => React.createElement("option", { key: b.id, value: b.id }, "🏪 " + b.name))
       )
     ),
 
@@ -1259,7 +1300,7 @@ function App() {
     ),
 
     // Bottom navigation
-    React.createElement("div", { style: { position: "fixed", bottom: 12, left: 12, right: 12, background: "rgba(255,255,255,0.96)", backdropFilter: "blur(20px)", border: "1px solid #EAECF2", borderRadius: 22, padding: "10px 6px", display: "flex", justifyContent: "space-around", zIndex: 200, boxShadow: "0 -2px 20px rgba(26,29,39,0.1)" } },
+    React.createElement("div", { className: "bottom-nav" },
       tabs.map(t =>
         React.createElement("button", {
           key: t.id,
@@ -1511,10 +1552,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         statusEl = document.createElement("div");
         statusEl.id = "qz-status";
         statusEl.style.cssText = [
-          "position:fixed;bottom:16px;right:16px;z-index:9999",
-          "padding:8px 14px;border-radius:20px;font-size:12px;font-weight:600",
-          "font-family:Poppins,sans-serif;pointer-events:none",
-          "transition:opacity 0.3s;opacity:0"
+          "position:fixed;top:70px;right:14px;z-index:150",
+          "padding:8px 14px;border-radius:20px;font-size:12px;font-weight:700",
+          "font-family:'Plus Jakarta Sans',sans-serif;pointer-events:none",
+          "box-shadow:0 6px 22px rgba(26,29,39,0.14)",
+          "transition:opacity 0.3s,transform 0.3s;opacity:0"
         ].join(";");
         document.body.appendChild(statusEl);
       }
@@ -1533,41 +1575,16 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       statusEl._timer = setTimeout(function () { statusEl.style.opacity = "0"; }, 3000);
     }
 
-    // ── Persistent printer status bar ───────────────────────
-    var barEl = null;
-
-    function createStatusBar() {
-      if (barEl) return;
-      barEl = document.createElement("div");
-      barEl.id = "qz-bar";
-      barEl.style.cssText = [
-        "position:fixed;bottom:0;left:0;right:0;z-index:99999",
-        "background:#fff;border-top:1px solid #EAECF2",
-        "display:flex;align-items:center;gap:12px;padding:8px 18px",
-        "font-family:Plus Jakarta Sans,sans-serif;font-size:12px;color:#6B7280"
-      ].join(";");
-      document.body.appendChild(barEl);
-      updateBar("connecting", "");
-    }
+    // ── Publish printer status to the app header (no floating bar) ──
+    function createStatusBar() { /* replaced by header chip — nothing to inject */ }
 
     function updateBar(state, printerName) {
-      if (!barEl) return;
-      var dot, label, color;
-      if (state === "connected") {
-        dot = "●"; color = "#00D26A";
-        label = "<span style='color:#00D26A;font-weight:700'>● QZ Tray Connected</span>" +
-                "&nbsp;&nbsp;|&nbsp;&nbsp;" +
-                "<span style='color:#FFC400'>🖨️ " + printerName + "</span>" +
-                "&nbsp;&nbsp;|&nbsp;&nbsp;" +
-                "<span style='color:#9A9A9A'>Auto-print: ON</span>";
-      } else if (state === "offline") {
-        label = "<span style='color:#E60000;font-weight:700'>● QZ Tray Offline</span>" +
-                "&nbsp;&nbsp;|&nbsp;&nbsp;" +
-                "<span style='color:#555'>Start QZ Tray app to enable printing</span>";
-      } else {
-        label = "<span style='color:#FFC400'>● Connecting to QZ Tray...</span>";
-      }
-      barEl.innerHTML = "<span style='font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#9CA3AF'>PRINTER</span>&nbsp;&nbsp;" + label;
+      // Expose current state so the React header can render a clean chip
+      // instead of a full-width bar overlapping the bottom navigation.
+      window.__qzState = { state: state, printer: printerName || "" };
+      try {
+        window.dispatchEvent(new CustomEvent("qz-status", { detail: window.__qzState }));
+      } catch (e) { /* older browsers: state still readable via window.__qzState */ }
     }
 
     // ── Init: connect on load ────────────────────────────────
