@@ -191,14 +191,58 @@ function OrderCard({ order, onStatusChange, isNew }) {
   );
 }
 
-// ── MENU TAB ──
-function MenuTabNew({ menu, setMenu }) {
+// ── MENU TAB (per-branch) ──
+function MenuTabNew({ branch, role, branches, seedMenu, onPickBranch }) {
+  // Each branch has its own independent menu. Owner must pick a branch to edit.
+  const editable = branch && branch !== "all";
+  const [menu, setLocalMenu] = React.useState({});
+  const [loading, setLoading] = React.useState(true);
+  const branchName = editable ? ((branches.find(function(b){return b.id===branch;})||{}).name || branch) : "";
+
+  // Load this branch's menu (seed from the shared/default menu the first time)
+  React.useEffect(function(){
+    if (!editable) { setLoading(false); return; }
+    var cancelled = false; var unsub;
+    setLoading(true);
+    (async function(){
+      if (!window.FB) { if(!cancelled){ setLocalMenu(seedMenu || {}); setLoading(false); } return; }
+      var m = await window.FB.getBranchMenu(branch);
+      if (!m) {
+        var shared = await window.FB.getMenu();
+        m = shared || seedMenu || {};
+        await window.FB.saveBranchMenu(branch, m); // seed a fresh independent copy
+      }
+      if (cancelled) return;
+      setLocalMenu(m); setLoading(false);
+      unsub = window.FB.onBranchMenuChange(branch, function(mm){ if (mm && !cancelled) setLocalMenu(mm); });
+    })();
+    return function(){ cancelled = true; if (unsub) unsub(); };
+  }, [branch]);
+
+  var save = function(u){ setLocalMenu(u); if (window.FB) window.FB.saveBranchMenu(branch, u); };
+
+  // NOTE: all hooks must run on every render — declare them before any early return.
   const [search, setSearch] = React.useState("");
   const [editingId, setEditingId] = React.useState(null);
   const [editData, setEditData] = React.useState({ price: "", name: "", nameAr: "", emoji: "" });
   const [saved, setSaved] = React.useState(false);
   const [adding, setAdding] = React.useState(false);
   const [newItem, setNewItem] = React.useState({ name: "", nameAr: "", price: "", emoji: "🍗", category: "🍗 Broast", cal: "" });
+
+  // Owner viewing "All Branches" — menus are separate, so pick one to edit
+  if (!editable) return React.createElement("div", null,
+    React.createElement("div", { className: "card", style: { padding: 22, textAlign: "center", marginBottom: 16 } },
+      React.createElement("div", { style: { fontSize: 40, marginBottom: 10 } }, "🍽️"),
+      React.createElement("div", { className: "section-title", style: { marginBottom: 6 } }, "Each branch has its own menu"),
+      React.createElement("div", { style: { fontSize: 13, color: "#6B7280", marginBottom: 16 } }, "Pick a branch to edit its items, prices and availability."),
+      React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+        branches.map(function(b){ return React.createElement("button", {
+          key: b.id, onClick: function(){ onPickBranch(b.id); }, className: "btn-secondary",
+          style: { padding: "14px 16px", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }
+        }, React.createElement("span", null, "🏪 " + b.name), React.createElement("span", { style: { color: "#E60000", fontWeight: 700 } }, "Edit →")); })
+      )
+    )
+  );
 
   const categories = Object.keys(menu).length > 0 ? Object.keys(menu) : ["🍗 Broast","🦐 Seafood","🍔 Burgers","🥪 Clubs","🌯 Sandwiches","🍟 Sides","🥤 Drinks"];
 
@@ -210,8 +254,7 @@ function MenuTabNew({ menu, setMenu }) {
     const u = {};
     for (const [cat, items] of Object.entries(menu))
       u[cat] = items.map(i => i.id === id ? { ...i, available: !i.available } : i);
-    setMenu(u);
-    if (window.FB) window.FB.saveMenu(u);
+    save(u);
   };
 
   const saveEdit = (id) => {
@@ -220,19 +263,17 @@ function MenuTabNew({ menu, setMenu }) {
     const u = {};
     for (const [cat, items] of Object.entries(menu))
       u[cat] = items.map(i => i.id === id ? { ...i, price: p, name: editData.name || i.name, nameAr: editData.nameAr || i.nameAr, emoji: editData.emoji || i.emoji } : i);
-    setMenu(u);
+    save(u);
     setEditingId(null);
-    if (window.FB) window.FB.saveMenu(u);
     setSaved(true); setTimeout(() => setSaved(false), 2000);
   };
 
   const deleteItem = (id) => {
-    if (!window.confirm("Delete this item?")) return;
+    if (!window.confirm("Delete this item from " + branchName + "?")) return;
     const u = {};
     for (const [cat, items] of Object.entries(menu))
       u[cat] = items.filter(i => i.id !== id);
-    setMenu(u);
-    if (window.FB) window.FB.saveMenu(u);
+    save(u);
   };
 
   const addItem = () => {
@@ -250,15 +291,23 @@ function MenuTabNew({ menu, setMenu }) {
       cal: newItem.cal || "—",
       available: true,
     }];
-    setMenu(u);
-    if (window.FB) window.FB.saveMenu(u);
+    save(u);
     setAdding(false);
     setNewItem({ name: "", nameAr: "", price: "", emoji: "🍗", category: categories[0] || "🍗 Broast", cal: "" });
     setSaved(true); setTimeout(() => setSaved(false), 2000);
   };
 
+  if (loading) return React.createElement("div", { className: "card", style: { padding: 40, textAlign: "center", color: "#6B7280" } }, "⏳ Loading " + branchName + " menu…");
+
   return React.createElement("div", null,
-    saved && React.createElement("div", { style: { background: "#ECFDF5", border: "1px solid #BBF7D0", color: "#059669", padding: "12px 16px", borderRadius: 14, marginBottom: 14, fontWeight: 600, fontSize: 13 } }, "✅ Menu saved!"),
+    // Which branch's menu is being edited
+    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, background: "#FFF1F2", border: "1px solid #FECACA", borderRadius: 12, padding: "9px 13px", marginBottom: 14 } },
+      React.createElement("span", { style: { fontSize: 15 } }, "🏪"),
+      React.createElement("span", { style: { fontSize: 12, color: "#6B7280", fontWeight: 600 } }, "Editing menu for"),
+      React.createElement("span", { style: { fontSize: 13, color: "#E60000", fontWeight: 800 } }, branchName),
+      role === "owner" && React.createElement("button", { onClick: function(){ onPickBranch("all"); }, style: { marginLeft: "auto", background: "none", border: "none", color: "#6B7280", fontSize: 11, fontWeight: 700, cursor: "pointer", textDecoration: "underline" } }, "switch")
+    ),
+    saved && React.createElement("div", { style: { background: "#ECFDF5", border: "1px solid #BBF7D0", color: "#059669", padding: "12px 16px", borderRadius: 14, marginBottom: 14, fontWeight: 600, fontSize: 13 } }, "✅ Saved to " + branchName + "!"),
 
     // Search
     React.createElement("input", { value: search, onChange: e => setSearch(e.target.value), placeholder: "🔍 Search menu items...", className: "inp", style: { marginBottom: 12, padding: "14px 16px", fontSize: 14 } }),
@@ -266,7 +315,7 @@ function MenuTabNew({ menu, setMenu }) {
     // Action buttons
     React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 16 } },
       React.createElement("button", { onClick: () => setAdding(!adding), className: adding ? "btn-secondary" : "btn-primary", style: { flex: 1, padding: "12px", fontSize: 13 } }, adding ? "✕ Cancel" : "+ Add Item"),
-      React.createElement("button", { onClick: async () => { if(window.FB) await window.FB.saveMenu(menu); setSaved(true); setTimeout(() => setSaved(false), 2000); }, className: "btn-green", style: { flex: 1, padding: "12px", fontSize: 13 } }, "💾 Save All")
+      React.createElement("button", { onClick: async () => { if(window.FB) await window.FB.saveBranchMenu(branch, menu); setSaved(true); setTimeout(() => setSaved(false), 2000); }, className: "btn-green", style: { flex: 1, padding: "12px", fontSize: 13 } }, "💾 Save All")
     ),
 
     // Add new item form
@@ -1293,7 +1342,7 @@ function App() {
         })()
       ),
       tab === "analytics" && React.createElement(AnalyticsTabNew, { orders: orders }),
-      tab === "menu" && React.createElement(MenuTabNew, { menu: menu, setMenu: updateMenu }),
+      tab === "menu" && React.createElement(MenuTabNew, { branch: selectedBranch, role: role, branches: BRANCHES, seedMenu: menu, onPickBranch: applyBranchFilter }),
       tab === "coupons" && React.createElement(CouponsTabNew, null),
       tab === "customers" && React.createElement(CustomersTabNew, { customers: customers }),
       tab === "settings" && React.createElement(SettingsTabNew, null)
@@ -1339,6 +1388,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       window.FB = {
         getMenu: async function(){ try{ var s=await getDoc(doc(_db,"settings","menu")); return s.exists()?s.data().menu:null; }catch(e){ return null; } },
         saveMenu: async function(m){ try{ await setDoc(doc(_db,"settings","menu"),{menu:m,updatedAt:serverTimestamp()}); }catch(e){} },
+        // Per-branch menus: each branch has its own independent menu doc (settings/menu_<branch>)
+        getBranchMenu: async function(b){ try{ var s=await getDoc(doc(_db,"settings","menu_"+b)); return s.exists()?s.data().menu:null; }catch(e){ return null; } },
+        saveBranchMenu: async function(b,m){ try{ await setDoc(doc(_db,"settings","menu_"+b),{menu:m,updatedAt:serverTimestamp()}); }catch(e){} },
+        onBranchMenuChange: function(b,cb){ return onSnapshot(doc(_db,"settings","menu_"+b),function(s){ if(s.exists())cb(s.data().menu); }); },
         getSettings: async function(){ try{ var s=await getDoc(doc(_db,"settings","restaurant")); return s.exists()?s.data():{isOpen:true}; }catch(e){ return {isOpen:true}; } },
         saveSettings: async function(d){ try{ await setDoc(doc(_db,"settings","restaurant"),Object.assign({},d,{updatedAt:serverTimestamp()})); }catch(e){} },
         saveOrder: async function(o){ try{ await addDoc(collection(_db,"orders"),Object.assign({},o,{createdAt:serverTimestamp(),status:"new"})); }catch(e){} },
