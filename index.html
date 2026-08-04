@@ -48,6 +48,25 @@ const ADMIN_STYLES = `
   .m-actions button { transition:transform 0.14s ease, background 0.14s ease; }
   .m-actions button:hover { transform:scale(1.14); }
   .m-actions button:active { transform:scale(0.88); }
+  .rp-chip { padding:7px 12px; border-radius:20px; border:1.5px solid #EAECF2; background:#fff; color:#6B7280; font-weight:700; font-size:12px; cursor:pointer; white-space:nowrap; font-family:'Plus Jakarta Sans',sans-serif; transition:all .15s; }
+  .rp-chip.on { background:#FFF1F2; border-color:#E60000; color:#E60000; }
+  .rp-chip.pill-blue.on { background:#EFF6FF; border-color:#2563EB; color:#2563EB; }
+  .rp-chip.pill-green.on { background:#ECFDF5; border-color:#059669; color:#059669; }
+  .rp-type { display:flex; flex-direction:column; align-items:center; gap:4px; padding:12px 8px; border-radius:14px; border:1.5px solid #EAECF2; background:#fff; cursor:pointer; transition:all .18s; }
+  .rp-type.on { background:#FFF1F2; border-color:#E60000; box-shadow:0 4px 14px rgba(230,0,0,0.10); transform:translateY(-2px); }
+  .rp-type .ico { font-size:22px; line-height:1; }
+  .rp-type .lbl { font-size:10.5px; font-weight:700; color:#6B7280; text-align:center; line-height:1.2; }
+  .rp-type.on .lbl { color:#E60000; }
+  .rp-bar { position:relative; background:#F4F5F9; border-radius:6px; height:10px; overflow:hidden; }
+  .rp-bar > div { position:absolute; inset:0; background:linear-gradient(90deg,#E60000,#FF4500); border-radius:6px; transition:width .5s cubic-bezier(0.22,1,0.36,1); }
+  .rp-heat { display:grid; grid-template-columns:auto repeat(24, minmax(14px,1fr)); gap:2px; }
+  .rp-heat .h { font-size:9px; color:#9CA3AF; text-align:center; padding:2px 0; font-weight:700; }
+  .rp-heat .d { font-size:10px; color:#6B7280; padding:3px 6px 3px 0; font-weight:700; }
+  .rp-heat .c { border-radius:3px; aspect-ratio:1/1; min-height:14px; transition:transform .15s; cursor:default; }
+  .rp-heat .c:hover { transform:scale(1.35); z-index:2; box-shadow:0 2px 8px rgba(0,0,0,0.15); }
+  .rp-delta.up { color:#059669; }
+  .rp-delta.dn { color:#DC2626; }
+  @media print { .no-print { display:none !important; } body { background:#fff; } .card { box-shadow:none; border:1px solid #ddd; break-inside:avoid; } }
   .shadow-sm { box-shadow: 0 2px 12px rgba(26,29,39,0.08); }
   .btn-primary { background: linear-gradient(135deg,#E60000,#FF4500); border: none; color: #fff; border-radius: 14px; font-family: 'Plus Jakarta Sans',sans-serif; font-weight: 700; cursor: pointer; transition: transform 0.15s, box-shadow 0.15s; box-shadow: 0 4px 16px rgba(230,0,0,0.3); }
   .btn-primary:hover { box-shadow: 0 6px 22px rgba(230,0,0,0.4); }
@@ -1010,39 +1029,112 @@ function AnalyticsTabNew({ orders }) {
 }
 
 // ════════════════════════════════════════════════════════════
-//  MAIN APP
+//  REPORTS TAB — full-featured, multi-report, multi-filter
 // ════════════════════════════════════════════════════════════
-function ReportsTabNew({ orders, branches }) {
-  const [period, setPeriod] = React.useState("30");   // today | yesterday | 7 | 30 | all
-  const [branchId, setBranchId] = React.useState("all");
-  const [report, setReport] = React.useState(null);
-  const [genAt, setGenAt] = React.useState(null);
-
-  const PERIODS = [
+function ReportsTabNew({ orders, branches, scopedBranchId }) {
+  const isScoped = !!scopedBranchId;
+  const REPORT_TYPES = [
+    { id: "summary",    ico: "📊", label: "Sales Summary" },
+    { id: "items",      ico: "🍗", label: "Item Sales" },
+    { id: "categories", ico: "🗂️", label: "Categories" },
+    { id: "customers",  ico: "👥", label: "Customers" },
+    { id: "hourly",     ico: "🕒", label: "Hourly Heatmap" },
+    { id: "compare",    ico: "⚖️", label: "Compare Periods" },
+    { id: "log",        ico: "🧾", label: "Transactions Log" },
+  ];
+  const PRESETS = [
     { id: "today", label: "Today" },
     { id: "yesterday", label: "Yesterday" },
-    { id: "7", label: "Last 7 Days" },
-    { id: "30", label: "Last 30 Days" },
+    { id: "7", label: "Last 7d" },
+    { id: "30", label: "Last 30d" },
+    { id: "thisMonth", label: "This Month" },
+    { id: "lastMonth", label: "Last Month" },
+    { id: "thisYear", label: "This Year" },
     { id: "all", label: "All Time" },
+    { id: "custom", label: "Custom" },
   ];
-  const periodLabel = (PERIODS.find(p => p.id === period) || {}).label || "";
 
-  function inPeriod(dateStr) {
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return false;
-    const now = new Date();
-    const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    if (period === "today") return d >= startToday;
-    if (period === "yesterday") { const y = new Date(startToday); y.setDate(y.getDate() - 1); return d >= y && d < startToday; }
-    if (period === "all") return true;
-    const days = parseInt(period, 10);
-    const start = new Date(startToday); start.setDate(start.getDate() - (days - 1));
-    return d >= start;
+  const iso = d => d.toISOString().slice(0, 10);
+  const today0 = () => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); };
+
+  const [reportType, setReportType] = React.useState("summary");
+  const [preset, setPreset]         = React.useState("30");
+  const [fromDate, setFromDate]     = React.useState(iso(new Date(Date.now() - 29 * 86400000)));
+  const [toDate, setToDate]         = React.useState(iso(new Date()));
+  const [branchSel, setBranchSel]   = React.useState(scopedBranchId ? [scopedBranchId] : branches.map(b => b.id));
+  const [typeSel, setTypeSel]       = React.useState(["pickup", "delivery"]);
+  const [paySel, setPaySel]         = React.useState(["cash", "prepaid"]);
+  const [statusSel, setStatusSel]   = React.useState(["new", "preparing", "ready", "done"]);
+  const [minAmt, setMinAmt]         = React.useState("");
+  const [maxAmt, setMaxAmt]         = React.useState("");
+  const [search, setSearch]         = React.useState("");
+  const [groupBy, setGroupBy]       = React.useState("day");
+  const [showFilters, setShowFilters] = React.useState(true);
+  const [report, setReport]         = React.useState(null);
+  const [genAt, setGenAt]           = React.useState(null);
+
+  React.useEffect(() => {
+    if (isScoped) setBranchSel([scopedBranchId]);
+  }, [scopedBranchId, isScoped]);
+
+  React.useEffect(() => { computeDateRangeFromPreset(preset); }, [preset]);
+  function computeDateRangeFromPreset(p) {
+    if (p === "custom") return;
+    const t = today0(); let f = new Date(t), to = new Date(t);
+    if (p === "today")      { }
+    else if (p === "yesterday") { f = new Date(t); f.setDate(f.getDate() - 1); to = new Date(f); }
+    else if (p === "7")     { f = new Date(t); f.setDate(f.getDate() - 6); }
+    else if (p === "30")    { f = new Date(t); f.setDate(f.getDate() - 29); }
+    else if (p === "thisMonth") { f = new Date(t.getFullYear(), t.getMonth(), 1); }
+    else if (p === "lastMonth") { f = new Date(t.getFullYear(), t.getMonth() - 1, 1); to = new Date(t.getFullYear(), t.getMonth(), 0); }
+    else if (p === "thisYear")  { f = new Date(t.getFullYear(), 0, 1); }
+    else if (p === "all")   { f = new Date(2000, 0, 1); }
+    setFromDate(iso(f)); setToDate(iso(to));
   }
 
+  const money = n => "SR " + (n || 0).toFixed(2);
+  const branchName = id => { const b = branches.find(x => x.id === id); return b ? b.name : (id || "Unknown"); };
+
+  // ─── multi-toggle helper ───
+  const toggleIn = (arr, v) => arr.includes(v) ? arr.filter(x => x !== v) : arr.concat([v]);
+
+  // ─── FILTER ORDERS ───
+  function applyFilters(list) {
+    const from = new Date(fromDate + "T00:00:00");
+    const to = new Date(toDate + "T23:59:59");
+    const s = search.trim().toLowerCase();
+    const mn = parseFloat(minAmt), mx = parseFloat(maxAmt);
+    return list.filter(o => {
+      const d = new Date(o.date); if (isNaN(d)) return false;
+      if (d < from || d > to) return false;
+      if (branchSel.length && !branchSel.includes(o.branch)) return false;
+      if (typeSel.length && !typeSel.includes(o.orderType || "pickup")) return false;
+      if (paySel.length && !paySel.includes(o.paymentMethod || "cash")) return false;
+      if (statusSel.length && !statusSel.includes(o.status || "new")) return false;
+      const total = o.total || 0;
+      if (!isNaN(mn) && total < mn) return false;
+      if (!isNaN(mx) && total > mx) return false;
+      if (s) {
+        const hay = ((o.orderNo || "") + " " + (o.userName || "") + " " + (o.userPhone || "")).toLowerCase();
+        if (hay.indexOf(s) === -1) return false;
+      }
+      return true;
+    });
+  }
+
+  function bucketKey(d) {
+    if (groupBy === "day")   return d.toLocaleDateString("en-GB");
+    if (groupBy === "week")  { const t = new Date(d); const day = (t.getDay() + 6) % 7; t.setDate(t.getDate() - day); return "Wk " + t.toLocaleDateString("en-GB"); }
+    if (groupBy === "month") return d.toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+    return d.toLocaleDateString("en-GB");
+  }
+
+  // ─── METRICS ───
   function metricsFor(list) {
     const m = { count: list.length, gross: 0, net: 0, vat: 0, pFee: 0, dFee: 0,
-      pickup: 0, delivery: 0, pickupRev: 0, deliveryRev: 0, pay: {}, status: {}, items: {}, days: {} };
+      pickup: 0, delivery: 0, pickupRev: 0, deliveryRev: 0,
+      pay: { cash: 0, prepaid: 0 }, status: { new: 0, preparing: 0, ready: 0, done: 0 },
+      items: {}, buckets: {}, hourly: {}, dow: {}, customers: {}, branch: {} };
     list.forEach(o => {
       const total = o.total || 0;
       const vat = o.vat || Math.round(total / 1.15 * 0.15 * 100) / 100;
@@ -1054,172 +1146,386 @@ function ReportsTabNew({ orders, branches }) {
       const st = o.status || "new"; m.status[st] = (m.status[st] || 0) + 1;
       (o.items || []).forEach(it => {
         const k = it.name || "Unknown";
-        if (!m.items[k]) m.items[k] = { qty: 0, rev: 0 };
-        m.items[k].qty += (it.qty || 0); m.items[k].rev += (it.price || 0) * (it.qty || 0);
+        if (!m.items[k]) m.items[k] = { qty: 0, rev: 0, orders: 0 };
+        m.items[k].qty += (it.qty || 0);
+        m.items[k].rev += (it.price || 0) * (it.qty || 0);
+        m.items[k].orders++;
       });
-      const dk = new Date(o.date).toLocaleDateString("en-GB");
-      if (!m.days[dk]) m.days[dk] = { orders: 0, gross: 0 };
-      m.days[dk].orders++; m.days[dk].gross += total;
+      const d = new Date(o.date);
+      const bk = bucketKey(d);
+      if (!m.buckets[bk]) m.buckets[bk] = { orders: 0, gross: 0, sortKey: d.getTime() };
+      m.buckets[bk].orders++; m.buckets[bk].gross += total;
+      const hk = d.getHours(); const dowK = (d.getDay() + 6) % 7; // Mon=0
+      const cellK = dowK + "_" + hk;
+      m.hourly[cellK] = (m.hourly[cellK] || 0) + 1;
+      m.dow[dowK] = (m.dow[dowK] || 0) + 1;
+      const ph = (o.userPhone || "").trim();
+      if (ph) {
+        if (!m.customers[ph]) m.customers[ph] = { name: o.userName || "", phone: ph, orders: 0, spent: 0, firstDate: d, lastDate: d };
+        m.customers[ph].orders++;
+        m.customers[ph].spent += total;
+        if (d < m.customers[ph].firstDate) m.customers[ph].firstDate = d;
+        if (d > m.customers[ph].lastDate) m.customers[ph].lastDate = d;
+      }
+      const bId = o.branch || "unknown";
+      if (!m.branch[bId]) m.branch[bId] = { count: 0, gross: 0, net: 0 };
+      m.branch[bId].count++; m.branch[bId].gross += total; m.branch[bId].net += net;
     });
     m.avg = m.count ? m.gross / m.count : 0;
-    m.topItems = Object.keys(m.items).map(k => ({ name: k, qty: m.items[k].qty, rev: m.items[k].rev })).sort((a, b) => b.qty - a.qty);
-    m.dayList = Object.keys(m.days).map(k => ({ date: k, orders: m.days[k].orders, gross: m.days[k].gross }));
-    m.busiest = m.dayList.slice().sort((a, b) => b.gross - a.gross)[0] || null;
+    m.topItems    = Object.entries(m.items).map(([n, v]) => ({ name: n, qty: v.qty, rev: v.rev, orders: v.orders })).sort((a, b) => b.rev - a.rev);
+    m.bucketList  = Object.entries(m.buckets).map(([k, v]) => ({ label: k, orders: v.orders, gross: v.gross, sortKey: v.sortKey })).sort((a, b) => a.sortKey - b.sortKey);
+    m.customerList = Object.values(m.customers).sort((a, b) => b.spent - a.spent);
+    m.busiest     = m.bucketList.slice().sort((a, b) => b.gross - a.gross)[0] || null;
     return m;
   }
 
   function generate() {
-    const base = orders.filter(o => inPeriod(o.date));
-    const scoped = branchId === "all" ? base : base.filter(o => o.branch === branchId);
-    const overall = metricsFor(scoped);
-    const perBranch = branches.map(b => ({ id: b.id, name: b.name, m: metricsFor(base.filter(o => o.branch === b.id)) }));
-    setReport({ overall, perBranch, scoped, branchId, period, periodLabel });
+    const filtered = applyFilters(orders);
+    const overall = metricsFor(filtered);
+    // For compare: previous equal-length window
+    let compareData = null;
+    if (reportType === "compare" && preset !== "custom" && preset !== "all") {
+      const from = new Date(fromDate + "T00:00:00");
+      const to = new Date(toDate + "T23:59:59");
+      const len = to - from;
+      const prevTo = new Date(from.getTime() - 1);
+      const prevFrom = new Date(prevTo.getTime() - len);
+      const prevList = orders.filter(o => {
+        const d = new Date(o.date); if (isNaN(d)) return false;
+        if (d < prevFrom || d > prevTo) return false;
+        if (branchSel.length && !branchSel.includes(o.branch)) return false;
+        return true;
+      });
+      compareData = { prevFrom: prevFrom, prevTo: prevTo, m: metricsFor(prevList) };
+    }
+    setReport({ filtered, overall, compareData, filters: { fromDate, toDate, branchSel, typeSel, paySel, statusSel, minAmt, maxAmt, search, groupBy, preset, reportType } });
     setGenAt(new Date());
   }
 
-  const money = n => "SR " + (n || 0).toFixed(2);
-  const branchName = id => (branches.find(b => b.id === id) || {}).name || id || "Unknown";
-
-  function downloadExcel() {
-    if (!report) return;
-    if (typeof XLSX === "undefined") { alert("Export library not loaded. Check your connection and reload."); return; }
-    const o = report.overall;
-    const scopeLabel = report.branchId === "all" ? "All Branches" : branchName(report.branchId);
-    const summary = [
-      { Metric: "Report", Value: "Broast Albahr — Sales Report" },
-      { Metric: "Branch", Value: scopeLabel },
-      { Metric: "Period", Value: report.periodLabel },
-      { Metric: "Generated", Value: new Date().toLocaleString("en-GB") },
-      { Metric: "", Value: "" },
-      { Metric: "Total Orders", Value: o.count },
-      { Metric: "Gross Sales (SR)", Value: o.gross.toFixed(2) },
-      { Metric: "Net Sales (SR)", Value: o.net.toFixed(2) },
-      { Metric: "VAT Collected (SR)", Value: o.vat.toFixed(2) },
-      { Metric: "Platform Fees (SR)", Value: o.pFee.toFixed(2) },
-      { Metric: "Delivery Fees (SR)", Value: o.dFee.toFixed(2) },
-      { Metric: "Average Order (SR)", Value: o.avg.toFixed(2) },
-      { Metric: "", Value: "" },
-      { Metric: "Pickup Orders", Value: o.pickup },
-      { Metric: "Pickup Revenue (SR)", Value: o.pickupRev.toFixed(2) },
-      { Metric: "Delivery Orders", Value: o.delivery },
-      { Metric: "Delivery Revenue (SR)", Value: o.deliveryRev.toFixed(2) },
-      { Metric: "", Value: "" },
-      { Metric: "Cash Orders", Value: o.pay.cash || 0 },
-      { Metric: "Prepaid/Card Orders", Value: o.pay.prepaid || 0 },
-    ];
-    const wb = XLSX.utils.book_new();
-    const wsS = XLSX.utils.json_to_sheet(summary); wsS["!cols"] = [{ wch: 26 }, { wch: 34 }];
-    XLSX.utils.book_append_sheet(wb, wsS, "Summary");
-
-    const byBranch = report.perBranch.map(b => ({
-      Branch: b.name, Orders: b.m.count, "Gross (SR)": b.m.gross.toFixed(2), "Net (SR)": b.m.net.toFixed(2),
-      "VAT (SR)": b.m.vat.toFixed(2), "Delivery Fees (SR)": b.m.dFee.toFixed(2), "Avg Order (SR)": b.m.avg.toFixed(2),
-    }));
-    const wsB = XLSX.utils.json_to_sheet(byBranch); wsB["!cols"] = [{ wch: 16 }, { wch: 9 }, { wch: 12 }, { wch: 12 }, { wch: 11 }, { wch: 16 }, { wch: 13 }];
-    XLSX.utils.book_append_sheet(wb, wsB, "By Branch");
-
-    const topRows = o.topItems.map(it => ({ Item: it.name, "Qty Sold": it.qty, "Revenue (SR)": it.rev.toFixed(2) }));
-    if (topRows.length) { const wsT = XLSX.utils.json_to_sheet(topRows); wsT["!cols"] = [{ wch: 34 }, { wch: 10 }, { wch: 14 }]; XLSX.utils.book_append_sheet(wb, wsT, "Top Items"); }
-
-    const dayRows = o.dayList.map(d => ({ Date: d.date, Orders: d.orders, "Gross (SR)": d.gross.toFixed(2) }));
-    if (dayRows.length) { const wsD = XLSX.utils.json_to_sheet(dayRows); wsD["!cols"] = [{ wch: 14 }, { wch: 9 }, { wch: 12 }]; XLSX.utils.book_append_sheet(wb, wsD, "Daily"); }
-
-    const orderRows = report.scoped.map(ord => {
-      const total = ord.total || 0;
-      const vat = ord.vat || Math.round(total / 1.15 * 0.15 * 100) / 100;
-      const net = total - vat - (ord.platformFee || 0) - (ord.deliveryFee || 0);
-      return {
-        Date: new Date(ord.date).toLocaleDateString("en-GB"), "Order #": ord.orderNo || "", Branch: branchName(ord.branch),
-        Customer: ord.userName || "", Phone: ord.userPhone || "", Type: ord.orderType || "", Payment: ord.paymentMethod || "",
-        Status: ord.status || "", "Total (SR)": total.toFixed(2), "VAT (SR)": vat.toFixed(2), "Net (SR)": net.toFixed(2),
-        Items: (ord.items || []).map(i => i.qty + "x " + i.name).join(" | "),
-      };
-    });
-    if (orderRows.length) { const wsO = XLSX.utils.json_to_sheet(orderRows); wsO["!cols"] = [{ wch: 12 }, { wch: 9 }, { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 11 }, { wch: 10 }, { wch: 11 }, { wch: 50 }]; XLSX.utils.book_append_sheet(wb, wsO, "Orders"); }
-
-    const safe = scopeLabel.replace(/[^A-Za-z]/g, "") || "All";
-    XLSX.writeFile(wb, "BroastAlbahr_Report_" + safe + "_" + period + "_" + new Date().toISOString().slice(0, 10) + ".xlsx");
+  function resetFilters() {
+    setPreset("30");
+    setBranchSel(isScoped ? [scopedBranchId] : branches.map(b => b.id));
+    setTypeSel(["pickup", "delivery"]); setPaySel(["cash", "prepaid"]);
+    setStatusSel(["new", "preparing", "ready", "done"]);
+    setMinAmt(""); setMaxAmt(""); setSearch(""); setGroupBy("day");
   }
 
-  const chip = (active, label, onClick) => React.createElement("button", {
-    key: label, onClick,
-    style: { padding: "8px 14px", borderRadius: 20, border: "1.5px solid " + (active ? "#E60000" : "#EAECF2"),
-      background: active ? "#FFF1F2" : "#fff", color: active ? "#E60000" : "#6B7280", fontWeight: 700, fontSize: 12.5,
-      cursor: "pointer", whiteSpace: "nowrap", fontFamily: "'Plus Jakarta Sans',sans-serif" }
-  }, label);
+  // ─── EXCEL EXPORT ───
+  function downloadExcel() {
+    if (!report) return;
+    if (typeof XLSX === "undefined") { alert("Export library not loaded. Reload and try again."); return; }
+    const o = report.overall;
+    const wb = XLSX.utils.book_new();
+    const summary = [
+      { Metric: "Report", Value: "Broast Albahr — " + (REPORT_TYPES.find(t => t.id === reportType) || { label: "" }).label },
+      { Metric: "From", Value: fromDate }, { Metric: "To", Value: toDate },
+      { Metric: "Branches", Value: branchSel.map(branchName).join(", ") },
+      { Metric: "Types", Value: typeSel.join(", ") },
+      { Metric: "Payments", Value: paySel.join(", ") },
+      { Metric: "Statuses", Value: statusSel.join(", ") },
+      { Metric: "Search", Value: search || "-" },
+      { Metric: "Generated", Value: new Date().toLocaleString("en-GB") },
+      { Metric: "", Value: "" },
+      { Metric: "Orders", Value: o.count },
+      { Metric: "Gross (SR)", Value: o.gross.toFixed(2) },
+      { Metric: "Net (SR)", Value: o.net.toFixed(2) },
+      { Metric: "VAT (SR)", Value: o.vat.toFixed(2) },
+      { Metric: "Delivery Fees (SR)", Value: o.dFee.toFixed(2) },
+      { Metric: "Avg Order (SR)", Value: o.avg.toFixed(2) },
+    ];
+    const wsS = XLSX.utils.json_to_sheet(summary); wsS["!cols"] = [{ wch: 22 }, { wch: 40 }];
+    XLSX.utils.book_append_sheet(wb, wsS, "Summary");
 
-  const sectionCard = (title, children) => React.createElement("div", { className: "card", style: { padding: 16, marginBottom: 12 } },
-    React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#1A1D27", marginBottom: 12 } }, title), children);
+    const byBranch = Object.entries(o.branch).map(([id, v]) => ({ Branch: branchName(id), Orders: v.count, "Gross (SR)": v.gross.toFixed(2), "Net (SR)": v.net.toFixed(2) }));
+    if (byBranch.length) { const w = XLSX.utils.json_to_sheet(byBranch); w["!cols"] = [{ wch: 16 }, { wch: 8 }, { wch: 12 }, { wch: 12 }]; XLSX.utils.book_append_sheet(wb, w, "By Branch"); }
 
+    const items = o.topItems.map(i => ({ Item: i.name, Qty: i.qty, "Revenue (SR)": i.rev.toFixed(2), Orders: i.orders }));
+    if (items.length) { const w = XLSX.utils.json_to_sheet(items); w["!cols"] = [{ wch: 32 }, { wch: 8 }, { wch: 12 }, { wch: 8 }]; XLSX.utils.book_append_sheet(wb, w, "Items"); }
+
+    const buckets = o.bucketList.map(b => ({ Period: b.label, Orders: b.orders, "Gross (SR)": b.gross.toFixed(2) }));
+    if (buckets.length) { const w = XLSX.utils.json_to_sheet(buckets); w["!cols"] = [{ wch: 18 }, { wch: 8 }, { wch: 12 }]; XLSX.utils.book_append_sheet(wb, w, "Trend"); }
+
+    const customers = o.customerList.map(c => ({ Customer: c.name, Phone: c.phone, Orders: c.orders, "Spent (SR)": c.spent.toFixed(2), "First": c.firstDate.toLocaleDateString("en-GB"), "Last": c.lastDate.toLocaleDateString("en-GB") }));
+    if (customers.length) { const w = XLSX.utils.json_to_sheet(customers); w["!cols"] = [{ wch: 18 }, { wch: 14 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 12 }]; XLSX.utils.book_append_sheet(wb, w, "Customers"); }
+
+    const log = report.filtered.map(ord => {
+      const total = ord.total || 0;
+      const vat = ord.vat || Math.round(total / 1.15 * 0.15 * 100) / 100;
+      return { Date: new Date(ord.date).toLocaleString("en-GB"), "Order #": ord.orderNo || "", Branch: branchName(ord.branch), Customer: ord.userName || "", Phone: ord.userPhone || "", Type: ord.orderType || "", Payment: ord.paymentMethod || "", Status: ord.status || "", "Total (SR)": total.toFixed(2), "VAT (SR)": vat.toFixed(2), Items: (ord.items || []).map(i => i.qty + "x " + i.name).join(" | ") };
+    });
+    if (log.length) { const w = XLSX.utils.json_to_sheet(log); w["!cols"] = [{ wch: 18 }, { wch: 9 }, { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 11 }, { wch: 10 }, { wch: 50 }]; XLSX.utils.book_append_sheet(wb, w, "Orders Log"); }
+
+    XLSX.writeFile(wb, "BroastAlbahr_" + reportType + "_" + fromDate + "_to_" + toDate + ".xlsx");
+  }
+
+  // ─── RENDER HELPERS ───
+  const chip = (on, label, onClick, cls) => React.createElement("button", { key: label, onClick: onClick, className: "rp-chip " + (cls || "") + (on ? " on" : "") }, label);
+  const sectionCard = (title, children, right) => React.createElement("div", { className: "card", style: { padding: 16, marginBottom: 12 } },
+    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#1A1D27" } }, title),
+      right || null),
+    children);
   const kv = (label, value, color) => React.createElement("div", { key: label, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #F4F5F9" } },
     React.createElement("span", { style: { fontSize: 12.5, color: "#6B7280" } }, label),
     React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: color || "#1A1D27" } }, value));
-
-  const simpleTable = (headers, rows) => React.createElement("div", { style: { overflowX: "auto" } },
+  const simpleTable = (headers, rows, aligns) => React.createElement("div", { style: { overflowX: "auto" } },
     React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5 } },
       React.createElement("thead", null, React.createElement("tr", null,
-        headers.map((h, i) => React.createElement("th", { key: i, style: { textAlign: i === 0 ? "left" : "right", padding: "8px 6px", color: "#9CA3AF", fontWeight: 700, borderBottom: "1.5px solid #EAECF2", whiteSpace: "nowrap" } }, h)))),
+        headers.map((h, i) => React.createElement("th", { key: i, style: { textAlign: (aligns && aligns[i]) || (i === 0 ? "left" : "right"), padding: "8px 6px", color: "#9CA3AF", fontWeight: 700, borderBottom: "1.5px solid #EAECF2", whiteSpace: "nowrap" } }, h)))),
       React.createElement("tbody", null, rows.map((r, ri) => React.createElement("tr", { key: ri },
-        r.map((c, ci) => React.createElement("td", { key: ci, style: { textAlign: ci === 0 ? "left" : "right", padding: "8px 6px", color: ci === 0 ? "#1A1D27" : "#374151", fontWeight: ci === 0 ? 600 : 500, borderBottom: "1px solid #F4F5F9", whiteSpace: "nowrap" } }, c)))))));
+        r.map((c, ci) => React.createElement("td", { key: ci, style: { textAlign: (aligns && aligns[ci]) || (ci === 0 ? "left" : "right"), padding: "8px 6px", color: ci === 0 ? "#1A1D27" : "#374151", fontWeight: ci === 0 ? 600 : 500, borderBottom: "1px solid #F4F5F9", whiteSpace: "nowrap" } }, c)))))));
+  const bar = (v, max) => React.createElement("div", { className: "rp-bar" }, React.createElement("div", { style: { width: (max ? Math.round(v / max * 100) : 0) + "%" } }));
+  const delta = (curr, prev) => {
+    if (!prev) return React.createElement("span", { className: "rp-delta up", style: { fontSize: 11, fontWeight: 800 } }, "—");
+    const pct = ((curr - prev) / prev) * 100;
+    const up = pct >= 0;
+    return React.createElement("span", { className: "rp-delta " + (up ? "up" : "dn"), style: { fontSize: 11, fontWeight: 800 } }, (up ? "▲ +" : "▼ ") + pct.toFixed(1) + "%");
+  };
 
-  const controls = React.createElement("div", { className: "card", style: { padding: 16, marginBottom: 14 } },
-    React.createElement("div", { style: { fontWeight: 700, fontSize: 12, color: "#6B7280", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" } }, "Period"),
-    React.createElement("div", { style: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, marginBottom: 14 } },
-      PERIODS.map(p => chip(period === p.id, p.label, () => setPeriod(p.id)))),
-    React.createElement("div", { style: { fontWeight: 700, fontSize: 12, color: "#6B7280", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" } }, "Branch"),
-    React.createElement("div", { style: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, marginBottom: 16 } },
-      [chip(branchId === "all", "All Branches", () => setBranchId("all"))].concat(branches.map(b => chip(branchId === b.id, b.name, () => setBranchId(b.id))))),
-    React.createElement("button", { onClick: generate, className: "btn-primary", style: { width: "100%", padding: "14px", fontSize: 15 } }, "📊 Generate Report"));
+  // ─── FILTER PANEL ───
+  const filterPanel = React.createElement("div", { className: "card no-print", style: { padding: 16, marginBottom: 14 } },
+    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } },
+      React.createElement("div", { style: { fontWeight: 800, fontSize: 13, color: "#1A1D27" } }, "🔎 Filters"),
+      React.createElement("button", { onClick: () => setShowFilters(v => !v), className: "btn-secondary", style: { padding: "4px 10px", fontSize: 11 } }, showFilters ? "Hide" : "Show")),
+    showFilters && React.createElement("div", null,
+      // Period presets
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 11, color: "#6B7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" } }, "Period"),
+      React.createElement("div", { style: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 6, marginBottom: 10 } },
+        PRESETS.map(p => chip(preset === p.id, p.label, () => setPreset(p.id)))),
+      // Custom dates
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 } },
+        React.createElement("div", null,
+          React.createElement("label", { style: { fontSize: 10, color: "#9CA3AF", fontWeight: 700, marginBottom: 4, display: "block" } }, "FROM"),
+          React.createElement("input", { className: "inp", type: "date", value: fromDate, onChange: e => { setPreset("custom"); setFromDate(e.target.value); }, style: { padding: "10px 12px" } })),
+        React.createElement("div", null,
+          React.createElement("label", { style: { fontSize: 10, color: "#9CA3AF", fontWeight: 700, marginBottom: 4, display: "block" } }, "TO"),
+          React.createElement("input", { className: "inp", type: "date", value: toDate, onChange: e => { setPreset("custom"); setToDate(e.target.value); }, style: { padding: "10px 12px" } }))),
+      // Branch multi
+      !isScoped && React.createElement(React.Fragment, null,
+        React.createElement("div", { style: { fontWeight: 700, fontSize: 11, color: "#6B7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" } }, "Branches"),
+        React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 } },
+          chip(branchSel.length === branches.length, "All", () => setBranchSel(branches.map(b => b.id))),
+          branches.map(b => chip(branchSel.includes(b.id), b.name, () => setBranchSel(prev => toggleIn(prev, b.id)))))),
+      // Order type
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 11, color: "#6B7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" } }, "Order Type"),
+      React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 } },
+        chip(typeSel.includes("pickup"), "🥡 Pickup", () => setTypeSel(prev => toggleIn(prev, "pickup"))),
+        chip(typeSel.includes("delivery"), "🚗 Delivery", () => setTypeSel(prev => toggleIn(prev, "delivery")))),
+      // Payment
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 11, color: "#6B7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" } }, "Payment"),
+      React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 } },
+        chip(paySel.includes("cash"), "💵 Cash", () => setPaySel(prev => toggleIn(prev, "cash"))),
+        chip(paySel.includes("prepaid"), "💳 Prepaid", () => setPaySel(prev => toggleIn(prev, "prepaid")))),
+      // Status
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 11, color: "#6B7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" } }, "Status"),
+      React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 } },
+        ["new", "preparing", "ready", "done"].map(s => chip(statusSel.includes(s), s.charAt(0).toUpperCase() + s.slice(1), () => setStatusSel(prev => toggleIn(prev, s))))),
+      // Amount + Group-by + Search
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 } },
+        React.createElement("div", null,
+          React.createElement("label", { style: { fontSize: 10, color: "#9CA3AF", fontWeight: 700, marginBottom: 4, display: "block" } }, "MIN SR"),
+          React.createElement("input", { className: "inp", type: "number", value: minAmt, onChange: e => setMinAmt(e.target.value), placeholder: "0", style: { padding: "10px 12px" } })),
+        React.createElement("div", null,
+          React.createElement("label", { style: { fontSize: 10, color: "#9CA3AF", fontWeight: 700, marginBottom: 4, display: "block" } }, "MAX SR"),
+          React.createElement("input", { className: "inp", type: "number", value: maxAmt, onChange: e => setMaxAmt(e.target.value), placeholder: "∞", style: { padding: "10px 12px" } }))),
+      React.createElement("div", { style: { marginBottom: 10 } },
+        React.createElement("label", { style: { fontSize: 10, color: "#9CA3AF", fontWeight: 700, marginBottom: 4, display: "block" } }, "SEARCH"),
+        React.createElement("input", { className: "inp", type: "text", value: search, onChange: e => setSearch(e.target.value), placeholder: "Order # / customer / phone", style: { padding: "10px 12px" } })),
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 11, color: "#6B7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" } }, "Group By"),
+      React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 14 } },
+        ["day", "week", "month"].map(g => chip(groupBy === g, g.charAt(0).toUpperCase() + g.slice(1), () => setGroupBy(g)))),
+      // Actions
+      React.createElement("div", { style: { display: "flex", gap: 8 } },
+        React.createElement("button", { onClick: generate, className: "btn-primary", style: { flex: 1, padding: "13px", fontSize: 14 } }, "📊 Generate"),
+        React.createElement("button", { onClick: resetFilters, className: "btn-secondary", style: { padding: "13px 16px", fontSize: 13 } }, "↺ Reset"))));
 
-  if (!report) return React.createElement("div", null, controls,
-    React.createElement("div", { className: "card", style: { padding: 48, textAlign: "center" } },
-      React.createElement("div", { style: { fontSize: 46, marginBottom: 12 } }, "🧾"),
-      React.createElement("div", { style: { color: "#6B7280", fontSize: 14, fontWeight: 600 } }, "Pick a period and branch, then tap Generate Report"),
-      React.createElement("div", { style: { color: "#9CA3AF", fontSize: 12, marginTop: 6 } }, "A detailed report is built from your live orders")));
+  // ─── TYPE PICKER ───
+  const typePicker = React.createElement("div", { className: "card no-print", style: { padding: 12, marginBottom: 14 } },
+    React.createElement("div", { style: { fontWeight: 700, fontSize: 11, color: "#6B7280", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" } }, "Report Type"),
+    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(94px, 1fr))", gap: 8 } },
+      REPORT_TYPES.map(t => React.createElement("div", { key: t.id, className: "rp-type " + (reportType === t.id ? "on" : ""), onClick: () => setReportType(t.id) },
+        React.createElement("div", { className: "ico" }, t.ico),
+        React.createElement("div", { className: "lbl" }, t.label)))));
 
-  const o = report.overall;
-  const scopeLabel = report.branchId === "all" ? "All Branches" : branchName(report.branchId);
+  // ─── RENDER by report type ───
+  function renderReport() {
+    if (!report) return React.createElement("div", { className: "card", style: { padding: 40, textAlign: "center" } },
+      React.createElement("div", { style: { fontSize: 46, marginBottom: 10 } }, "📊"),
+      React.createElement("div", { style: { color: "#6B7280", fontSize: 14, fontWeight: 600 } }, "Set your filters and tap Generate"),
+      React.createElement("div", { style: { color: "#9CA3AF", fontSize: 12, marginTop: 6 } }, "The report you see is built live from your orders"));
 
-  return React.createElement("div", { className: "fade-in" }, controls,
-    React.createElement("div", { className: "card", style: { padding: 16, marginBottom: 12, borderLeft: "4px solid #E60000" } },
+    const o = report.overall;
+    const scopeSummary = "From " + fromDate + " to " + toDate + " · " + (isScoped ? branchName(scopedBranchId) : (branchSel.length === branches.length ? "All branches" : branchSel.map(branchName).join(", ")));
+    const header = React.createElement("div", { className: "card", style: { padding: 16, marginBottom: 12, borderLeft: "4px solid #E60000" } },
       React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 } },
         React.createElement("div", null,
-          React.createElement("div", { style: { fontWeight: 800, fontSize: 16, color: "#1A1D27" } }, scopeLabel),
-          React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 2 } }, report.periodLabel + " · generated " + (genAt ? genAt.toLocaleString("en-GB") : ""))),
-        React.createElement("div", { style: { display: "flex", gap: 8 } },
-          React.createElement("button", { onClick: downloadExcel, className: "btn-green", style: { padding: "10px 14px", fontSize: 13 } }, "⬇️ Excel"),
-          React.createElement("button", { onClick: () => window.print(), className: "btn-secondary", style: { padding: "10px 14px", fontSize: 13 } }, "🖨️ Print"))),
-      o.count === 0 && React.createElement("div", { style: { marginTop: 12, color: "#9CA3AF", fontSize: 13 } }, "No orders found for this selection.")),
+          React.createElement("div", { style: { fontWeight: 800, fontSize: 16, color: "#1A1D27" } }, (REPORT_TYPES.find(t => t.id === reportType) || {}).label),
+          React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 2 } }, scopeSummary),
+          React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", marginTop: 4 } }, "Generated " + (genAt ? genAt.toLocaleString("en-GB") : ""))),
+        React.createElement("div", { className: "no-print", style: { display: "flex", gap: 6 } },
+          React.createElement("button", { onClick: downloadExcel, className: "btn-green", style: { padding: "9px 12px", fontSize: 12 } }, "⬇️ Excel"),
+          React.createElement("button", { onClick: () => window.print(), className: "btn-secondary", style: { padding: "9px 12px", fontSize: 12 } }, "🖨️ Print"))),
+      o.count === 0 && React.createElement("div", { style: { marginTop: 12, color: "#9CA3AF", fontSize: 13 } }, "No orders match these filters."));
 
-    o.count > 0 && React.createElement(React.Fragment, null,
-      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 } },
-        React.createElement(StatCard, { icon: "🧾", label: "Total Orders", value: o.count, color: "#E60000" }),
-        React.createElement(StatCard, { icon: "💰", label: "Gross Sales", value: money(o.gross), color: "#059669" }),
-        React.createElement(StatCard, { icon: "💵", label: "Net Sales", value: money(o.net), color: "#2563EB" }),
-        React.createElement(StatCard, { icon: "🧮", label: "VAT Collected", value: money(o.vat), color: "#7C3AED" }),
-        React.createElement(StatCard, { icon: "📊", label: "Avg Order", value: money(o.avg), color: "#EA580C" }),
-        React.createElement(StatCard, { icon: "🚗", label: "Delivery Fees", value: money(o.dFee), color: "#0891B2" })),
+    if (o.count === 0) return header;
 
-      sectionCard("Order Type", React.createElement("div", null,
-        kv("🥡 Pickup", o.pickup + " orders · " + money(o.pickupRev), "#059669"),
-        kv("🚗 Delivery", o.delivery + " orders · " + money(o.deliveryRev), "#2563EB"))),
-      sectionCard("Payment Method", React.createElement("div", null,
-        kv("💵 Cash on Delivery", (o.pay.cash || 0) + " orders"),
-        kv("💳 Prepaid / Card", (o.pay.prepaid || 0) + " orders"))),
-      sectionCard("Order Status", React.createElement("div", null,
-        ["new", "preparing", "ready", "done"].map(s => kv(s.charAt(0).toUpperCase() + s.slice(1), (o.status[s] || 0) + " orders")))),
+    // Common KPI row
+    const kpis = React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 } },
+      React.createElement(StatCard, { icon: "🧾", label: "Orders", value: o.count, color: "#E60000" }),
+      React.createElement(StatCard, { icon: "💰", label: "Gross Sales", value: money(o.gross), color: "#059669" }),
+      React.createElement(StatCard, { icon: "💵", label: "Net Sales", value: money(o.net), color: "#2563EB" }),
+      React.createElement(StatCard, { icon: "🧮", label: "VAT", value: money(o.vat), color: "#7C3AED" }),
+      React.createElement(StatCard, { icon: "📊", label: "Avg Order", value: money(o.avg), color: "#EA580C" }),
+      React.createElement(StatCard, { icon: "🚗", label: "Delivery Fees", value: money(o.dFee), color: "#0891B2" }));
 
-      o.topItems.length > 0 && sectionCard("Top Selling Items",
-        simpleTable(["Item", "Qty", "Revenue"], o.topItems.slice(0, 10).map(it => [it.name, it.qty, money(it.rev)]))),
+    // ── SUMMARY ──
+    if (reportType === "summary") {
+      const maxBucket = Math.max.apply(null, o.bucketList.map(b => b.gross).concat([1]));
+      return React.createElement(React.Fragment, null, header, kpis,
+        sectionCard("Trend (grouped by " + groupBy + ")",
+          simpleTable(["Period", "Orders", "Gross", "Bar"],
+            o.bucketList.map(b => [b.label, b.orders, money(b.gross), bar(b.gross, maxBucket)]),
+            ["left", "right", "right", "left"])),
+        sectionCard("Order Type", React.createElement("div", null,
+          kv("🥡 Pickup", o.pickup + " · " + money(o.pickupRev), "#059669"),
+          kv("🚗 Delivery", o.delivery + " · " + money(o.deliveryRev), "#2563EB"))),
+        sectionCard("Payment", React.createElement("div", null,
+          kv("💵 Cash", (o.pay.cash || 0) + " orders"),
+          kv("💳 Prepaid", (o.pay.prepaid || 0) + " orders"))),
+        sectionCard("Status", React.createElement("div", null,
+          ["new", "preparing", "ready", "done"].map(s => kv(s.charAt(0).toUpperCase() + s.slice(1), (o.status[s] || 0) + " orders")))),
+        !isScoped && Object.keys(o.branch).length > 1 && sectionCard("By Branch",
+          simpleTable(["Branch", "Orders", "Gross", "Net"],
+            Object.entries(o.branch).map(([id, v]) => [branchName(id), v.count, money(v.gross), money(v.net)]))));
+    }
 
-      report.branchId === "all" && sectionCard("By Branch",
-        simpleTable(["Branch", "Orders", "Gross", "Net", "VAT"], report.perBranch.map(b => [b.name, b.m.count, money(b.m.gross), money(b.m.net), money(b.m.vat)]))),
+    // ── ITEMS ──
+    if (reportType === "items") {
+      const maxRev = Math.max.apply(null, o.topItems.map(i => i.rev).concat([1]));
+      return React.createElement(React.Fragment, null, header, kpis,
+        sectionCard("Item Sales · " + o.topItems.length + " unique items",
+          simpleTable(["Item", "Qty", "Revenue", "Orders", "Bar"],
+            o.topItems.map(i => [i.name, i.qty, money(i.rev), i.orders, bar(i.rev, maxRev)]),
+            ["left", "right", "right", "right", "left"])));
+    }
 
-      o.dayList.length > 0 && sectionCard("Daily Breakdown",
-        simpleTable(["Date", "Orders", "Gross"], o.dayList.map(d => [d.date, d.orders, money(d.gross)]))),
+    // ── CATEGORIES ──
+    if (reportType === "categories") {
+      // Try to infer category from item name emoji prefix, else "Other"
+      const catMap = {};
+      report.filtered.forEach(ord => (ord.items || []).forEach(it => {
+        const nm = it.name || "";
+        let cat = "Other";
+        if (/broast|chicken/i.test(nm)) cat = "🍗 Broast";
+        else if (/burger/i.test(nm)) cat = "🍔 Burgers";
+        else if (/sandwich|club/i.test(nm)) cat = "🥪 Sandwiches";
+        else if (/fries/i.test(nm)) cat = "🍟 Fries";
+        else if (/shrimp/i.test(nm)) cat = "🦐 Shrimp";
+        else if (/fish/i.test(nm)) cat = "🐟 Fish";
+        else if (/nugget|zinger|crispy|mushab/i.test(nm)) cat = "🌶️ Specials";
+        if (!catMap[cat]) catMap[cat] = { qty: 0, rev: 0 };
+        catMap[cat].qty += (it.qty || 0); catMap[cat].rev += (it.price || 0) * (it.qty || 0);
+      }));
+      const catRows = Object.entries(catMap).map(([k, v]) => ({ cat: k, qty: v.qty, rev: v.rev })).sort((a, b) => b.rev - a.rev);
+      const maxCat = Math.max.apply(null, catRows.map(c => c.rev).concat([1]));
+      return React.createElement(React.Fragment, null, header, kpis,
+        sectionCard("Category Performance",
+          simpleTable(["Category", "Qty", "Revenue", "Share"],
+            catRows.map(c => [c.cat, c.qty, money(c.rev), bar(c.rev, maxCat)]),
+            ["left", "right", "right", "left"])));
+    }
 
-      o.busiest && React.createElement("div", { style: { textAlign: "center", color: "#9CA3AF", fontSize: 12, margin: "6px 0 4px" } },
-        "🔥 Busiest day: " + o.busiest.date + " (" + money(o.busiest.gross) + ")")));
+    // ── CUSTOMERS ──
+    if (reportType === "customers") {
+      const cList = o.customerList;
+      const newC = cList.filter(c => c.orders === 1).length;
+      const returning = cList.filter(c => c.orders > 1).length;
+      const avgSpend = cList.length ? (cList.reduce((s, c) => s + c.spent, 0) / cList.length) : 0;
+      return React.createElement(React.Fragment, null, header, kpis,
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12 } },
+          React.createElement(StatCard, { icon: "👤", label: "Customers", value: cList.length, color: "#E60000" }),
+          React.createElement(StatCard, { icon: "🆕", label: "New", value: newC, color: "#2563EB" }),
+          React.createElement(StatCard, { icon: "🔁", label: "Returning", value: returning, color: "#059669" })),
+        sectionCard("Avg spend per customer", React.createElement("div", { style: { fontSize: 22, fontWeight: 800, color: "#7C3AED" } }, money(avgSpend))),
+        sectionCard("Top Customers",
+          simpleTable(["Customer", "Phone", "Orders", "Spent"],
+            cList.slice(0, 25).map(c => [c.name || "—", c.phone, c.orders, money(c.spent)]))));
+    }
+
+    // ── HOURLY HEATMAP ──
+    if (reportType === "hourly") {
+      const maxCell = Math.max.apply(null, Object.values(o.hourly).concat([1]));
+      const heatColor = v => {
+        if (!v) return "#F4F5F9";
+        const t = Math.min(1, v / maxCell);
+        const r = Math.round(255); const g = Math.round(240 - 200 * t); const b = Math.round(240 - 240 * t);
+        return "rgb(" + r + "," + g + "," + b + ")";
+      };
+      const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      const hoursHead = [React.createElement("div", { key: "corner", className: "d" }, "")].concat(
+        Array.from({ length: 24 }, (_, h) => React.createElement("div", { key: "h" + h, className: "h" }, h)));
+      const rows = days.map((d, di) => [React.createElement("div", { key: "d" + di, className: "d" }, d)].concat(
+        Array.from({ length: 24 }, (_, h) => {
+          const v = o.hourly[di + "_" + h] || 0;
+          return React.createElement("div", { key: di + "_" + h, className: "c", title: d + " " + h + ":00 · " + v + " orders", style: { background: heatColor(v) } });
+        })));
+      const dowLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      const dowRows = dowLabels.map((d, i) => [d, o.dow[i] || 0]);
+      return React.createElement(React.Fragment, null, header, kpis,
+        sectionCard("Hourly Heatmap (rows = day, columns = hour 0–23)",
+          React.createElement("div", { className: "rp-heat" }, hoursHead.concat(rows.flat()))),
+        sectionCard("Day of Week",
+          simpleTable(["Day", "Orders"], dowRows)));
+    }
+
+    // ── COMPARE ──
+    if (reportType === "compare") {
+      const c = report.compareData;
+      if (!c) return React.createElement(React.Fragment, null, header,
+        React.createElement("div", { className: "card", style: { padding: 20, color: "#6B7280", fontSize: 13 } }, "Compare requires a preset period (not Custom / All Time)."));
+      const p = c.m;
+      const row = (label, curr, prev, fmt) => React.createElement("tr", { key: label },
+        React.createElement("td", { style: { padding: "10px 6px", fontSize: 13, fontWeight: 600, color: "#1A1D27" } }, label),
+        React.createElement("td", { style: { padding: "10px 6px", textAlign: "right", fontSize: 13, fontWeight: 700 } }, fmt(curr)),
+        React.createElement("td", { style: { padding: "10px 6px", textAlign: "right", fontSize: 12, color: "#6B7280" } }, fmt(prev)),
+        React.createElement("td", { style: { padding: "10px 6px", textAlign: "right" } }, delta(curr, prev)));
+      return React.createElement(React.Fragment, null, header,
+        React.createElement("div", { className: "card", style: { padding: 16, marginBottom: 12 } },
+          React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 6 } }, "Comparing:"),
+          React.createElement("div", { style: { fontSize: 12, color: "#1A1D27", fontWeight: 700 } }, "Current: " + fromDate + " → " + toDate),
+          React.createElement("div", { style: { fontSize: 12, color: "#9CA3AF" } }, "Previous: " + iso(c.prevFrom) + " → " + iso(c.prevTo))),
+        React.createElement("div", { className: "card", style: { padding: 12 } },
+          React.createElement("table", { style: { width: "100%", borderCollapse: "collapse" } },
+            React.createElement("thead", null, React.createElement("tr", null,
+              React.createElement("th", { style: { padding: 8, textAlign: "left", fontSize: 11, color: "#9CA3AF", fontWeight: 700 } }, "Metric"),
+              React.createElement("th", { style: { padding: 8, textAlign: "right", fontSize: 11, color: "#9CA3AF", fontWeight: 700 } }, "Current"),
+              React.createElement("th", { style: { padding: 8, textAlign: "right", fontSize: 11, color: "#9CA3AF", fontWeight: 700 } }, "Previous"),
+              React.createElement("th", { style: { padding: 8, textAlign: "right", fontSize: 11, color: "#9CA3AF", fontWeight: 700 } }, "Δ"))),
+            React.createElement("tbody", null,
+              row("Orders", o.count, p.count, v => String(v)),
+              row("Gross", o.gross, p.gross, money),
+              row("Net", o.net, p.net, money),
+              row("VAT", o.vat, p.vat, money),
+              row("Avg Order", o.avg, p.avg, money),
+              row("Pickup", o.pickup, p.pickup, v => String(v)),
+              row("Delivery", o.delivery, p.delivery, v => String(v))))));
+    }
+
+    // ── LOG ──
+    if (reportType === "log") {
+      const rows = report.filtered.slice(0, 500).map(ord => {
+        const total = ord.total || 0;
+        return [new Date(ord.date).toLocaleString("en-GB"), ord.orderNo || "—", branchName(ord.branch), ord.userName || "—", ord.orderType || "—", ord.paymentMethod || "—", ord.status || "—", money(total)];
+      });
+      return React.createElement(React.Fragment, null, header, kpis,
+        sectionCard("Transactions · showing " + rows.length + " of " + report.filtered.length,
+          simpleTable(["Date", "#", "Branch", "Customer", "Type", "Pay", "Status", "Total"], rows)));
+    }
+    return header;
+  }
+
+  return React.createElement("div", { className: "fade-in" },
+    typePicker, filterPanel, renderReport());
 }
 
 function App() {
@@ -1659,7 +1965,7 @@ function App() {
       ),
       tab === "home" && isOwner && React.createElement(OwnerHome, { orders: orders, branches: BRANCHES, onOpenBranch: id => { setSelectedBranch(id); setTab("orders"); } }),
       tab === "analytics" && React.createElement(AnalyticsTabNew, { orders: orders }),
-      tab === "reports" && React.createElement(ReportsTabNew, { orders: orders, branches: BRANCHES }),
+      tab === "reports" && React.createElement(ReportsTabNew, { orders: orders, branches: BRANCHES, scopedBranchId: branchScope }),
       tab === "menu" && isOwner && React.createElement(MenuTabNew, { menu: menu, setMenu: updateMenu }),
       tab === "coupons" && isOwner && React.createElement(CouponsTabNew, null),
       tab === "customers" && React.createElement(CustomersTabNew, { customers: customers }),
