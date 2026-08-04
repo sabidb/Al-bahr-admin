@@ -905,6 +905,216 @@ function AnalyticsTabNew({ orders }) {
 // ════════════════════════════════════════════════════════════
 //  MAIN APP
 // ════════════════════════════════════════════════════════════
+function ReportsTabNew({ orders, branches }) {
+  const [period, setPeriod] = React.useState("30");   // today | yesterday | 7 | 30 | all
+  const [branchId, setBranchId] = React.useState("all");
+  const [report, setReport] = React.useState(null);
+  const [genAt, setGenAt] = React.useState(null);
+
+  const PERIODS = [
+    { id: "today", label: "Today" },
+    { id: "yesterday", label: "Yesterday" },
+    { id: "7", label: "Last 7 Days" },
+    { id: "30", label: "Last 30 Days" },
+    { id: "all", label: "All Time" },
+  ];
+  const periodLabel = (PERIODS.find(p => p.id === period) || {}).label || "";
+
+  function inPeriod(dateStr) {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return false;
+    const now = new Date();
+    const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (period === "today") return d >= startToday;
+    if (period === "yesterday") { const y = new Date(startToday); y.setDate(y.getDate() - 1); return d >= y && d < startToday; }
+    if (period === "all") return true;
+    const days = parseInt(period, 10);
+    const start = new Date(startToday); start.setDate(start.getDate() - (days - 1));
+    return d >= start;
+  }
+
+  function metricsFor(list) {
+    const m = { count: list.length, gross: 0, net: 0, vat: 0, pFee: 0, dFee: 0,
+      pickup: 0, delivery: 0, pickupRev: 0, deliveryRev: 0, pay: {}, status: {}, items: {}, days: {} };
+    list.forEach(o => {
+      const total = o.total || 0;
+      const vat = o.vat || Math.round(total / 1.15 * 0.15 * 100) / 100;
+      const pFee = o.platformFee || 0, dFee = o.deliveryFee || 0;
+      const net = total - vat - pFee - dFee;
+      m.gross += total; m.vat += vat; m.pFee += pFee; m.dFee += dFee; m.net += net;
+      if (o.orderType === "delivery") { m.delivery++; m.deliveryRev += total; } else { m.pickup++; m.pickupRev += total; }
+      const pm = o.paymentMethod || "cash"; m.pay[pm] = (m.pay[pm] || 0) + 1;
+      const st = o.status || "new"; m.status[st] = (m.status[st] || 0) + 1;
+      (o.items || []).forEach(it => {
+        const k = it.name || "Unknown";
+        if (!m.items[k]) m.items[k] = { qty: 0, rev: 0 };
+        m.items[k].qty += (it.qty || 0); m.items[k].rev += (it.price || 0) * (it.qty || 0);
+      });
+      const dk = new Date(o.date).toLocaleDateString("en-GB");
+      if (!m.days[dk]) m.days[dk] = { orders: 0, gross: 0 };
+      m.days[dk].orders++; m.days[dk].gross += total;
+    });
+    m.avg = m.count ? m.gross / m.count : 0;
+    m.topItems = Object.keys(m.items).map(k => ({ name: k, qty: m.items[k].qty, rev: m.items[k].rev })).sort((a, b) => b.qty - a.qty);
+    m.dayList = Object.keys(m.days).map(k => ({ date: k, orders: m.days[k].orders, gross: m.days[k].gross }));
+    m.busiest = m.dayList.slice().sort((a, b) => b.gross - a.gross)[0] || null;
+    return m;
+  }
+
+  function generate() {
+    const base = orders.filter(o => inPeriod(o.date));
+    const scoped = branchId === "all" ? base : base.filter(o => o.branch === branchId);
+    const overall = metricsFor(scoped);
+    const perBranch = branches.map(b => ({ id: b.id, name: b.name, m: metricsFor(base.filter(o => o.branch === b.id)) }));
+    setReport({ overall, perBranch, scoped, branchId, period, periodLabel });
+    setGenAt(new Date());
+  }
+
+  const money = n => "SR " + (n || 0).toFixed(2);
+  const branchName = id => (branches.find(b => b.id === id) || {}).name || id || "Unknown";
+
+  function downloadExcel() {
+    if (!report) return;
+    if (typeof XLSX === "undefined") { alert("Export library not loaded. Check your connection and reload."); return; }
+    const o = report.overall;
+    const scopeLabel = report.branchId === "all" ? "All Branches" : branchName(report.branchId);
+    const summary = [
+      { Metric: "Report", Value: "Broast Albahr — Sales Report" },
+      { Metric: "Branch", Value: scopeLabel },
+      { Metric: "Period", Value: report.periodLabel },
+      { Metric: "Generated", Value: new Date().toLocaleString("en-GB") },
+      { Metric: "", Value: "" },
+      { Metric: "Total Orders", Value: o.count },
+      { Metric: "Gross Sales (SR)", Value: o.gross.toFixed(2) },
+      { Metric: "Net Sales (SR)", Value: o.net.toFixed(2) },
+      { Metric: "VAT Collected (SR)", Value: o.vat.toFixed(2) },
+      { Metric: "Platform Fees (SR)", Value: o.pFee.toFixed(2) },
+      { Metric: "Delivery Fees (SR)", Value: o.dFee.toFixed(2) },
+      { Metric: "Average Order (SR)", Value: o.avg.toFixed(2) },
+      { Metric: "", Value: "" },
+      { Metric: "Pickup Orders", Value: o.pickup },
+      { Metric: "Pickup Revenue (SR)", Value: o.pickupRev.toFixed(2) },
+      { Metric: "Delivery Orders", Value: o.delivery },
+      { Metric: "Delivery Revenue (SR)", Value: o.deliveryRev.toFixed(2) },
+      { Metric: "", Value: "" },
+      { Metric: "Cash Orders", Value: o.pay.cash || 0 },
+      { Metric: "Prepaid/Card Orders", Value: o.pay.prepaid || 0 },
+    ];
+    const wb = XLSX.utils.book_new();
+    const wsS = XLSX.utils.json_to_sheet(summary); wsS["!cols"] = [{ wch: 26 }, { wch: 34 }];
+    XLSX.utils.book_append_sheet(wb, wsS, "Summary");
+
+    const byBranch = report.perBranch.map(b => ({
+      Branch: b.name, Orders: b.m.count, "Gross (SR)": b.m.gross.toFixed(2), "Net (SR)": b.m.net.toFixed(2),
+      "VAT (SR)": b.m.vat.toFixed(2), "Delivery Fees (SR)": b.m.dFee.toFixed(2), "Avg Order (SR)": b.m.avg.toFixed(2),
+    }));
+    const wsB = XLSX.utils.json_to_sheet(byBranch); wsB["!cols"] = [{ wch: 16 }, { wch: 9 }, { wch: 12 }, { wch: 12 }, { wch: 11 }, { wch: 16 }, { wch: 13 }];
+    XLSX.utils.book_append_sheet(wb, wsB, "By Branch");
+
+    const topRows = o.topItems.map(it => ({ Item: it.name, "Qty Sold": it.qty, "Revenue (SR)": it.rev.toFixed(2) }));
+    if (topRows.length) { const wsT = XLSX.utils.json_to_sheet(topRows); wsT["!cols"] = [{ wch: 34 }, { wch: 10 }, { wch: 14 }]; XLSX.utils.book_append_sheet(wb, wsT, "Top Items"); }
+
+    const dayRows = o.dayList.map(d => ({ Date: d.date, Orders: d.orders, "Gross (SR)": d.gross.toFixed(2) }));
+    if (dayRows.length) { const wsD = XLSX.utils.json_to_sheet(dayRows); wsD["!cols"] = [{ wch: 14 }, { wch: 9 }, { wch: 12 }]; XLSX.utils.book_append_sheet(wb, wsD, "Daily"); }
+
+    const orderRows = report.scoped.map(ord => {
+      const total = ord.total || 0;
+      const vat = ord.vat || Math.round(total / 1.15 * 0.15 * 100) / 100;
+      const net = total - vat - (ord.platformFee || 0) - (ord.deliveryFee || 0);
+      return {
+        Date: new Date(ord.date).toLocaleDateString("en-GB"), "Order #": ord.orderNo || "", Branch: branchName(ord.branch),
+        Customer: ord.userName || "", Phone: ord.userPhone || "", Type: ord.orderType || "", Payment: ord.paymentMethod || "",
+        Status: ord.status || "", "Total (SR)": total.toFixed(2), "VAT (SR)": vat.toFixed(2), "Net (SR)": net.toFixed(2),
+        Items: (ord.items || []).map(i => i.qty + "x " + i.name).join(" | "),
+      };
+    });
+    if (orderRows.length) { const wsO = XLSX.utils.json_to_sheet(orderRows); wsO["!cols"] = [{ wch: 12 }, { wch: 9 }, { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 11 }, { wch: 10 }, { wch: 11 }, { wch: 50 }]; XLSX.utils.book_append_sheet(wb, wsO, "Orders"); }
+
+    const safe = scopeLabel.replace(/[^A-Za-z]/g, "") || "All";
+    XLSX.writeFile(wb, "BroastAlbahr_Report_" + safe + "_" + period + "_" + new Date().toISOString().slice(0, 10) + ".xlsx");
+  }
+
+  const chip = (active, label, onClick) => React.createElement("button", {
+    key: label, onClick,
+    style: { padding: "8px 14px", borderRadius: 20, border: "1.5px solid " + (active ? "#E60000" : "#EAECF2"),
+      background: active ? "#FFF1F2" : "#fff", color: active ? "#E60000" : "#6B7280", fontWeight: 700, fontSize: 12.5,
+      cursor: "pointer", whiteSpace: "nowrap", fontFamily: "'Plus Jakarta Sans',sans-serif" }
+  }, label);
+
+  const sectionCard = (title, children) => React.createElement("div", { className: "card", style: { padding: 16, marginBottom: 12 } },
+    React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#1A1D27", marginBottom: 12 } }, title), children);
+
+  const kv = (label, value, color) => React.createElement("div", { key: label, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #F4F5F9" } },
+    React.createElement("span", { style: { fontSize: 12.5, color: "#6B7280" } }, label),
+    React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: color || "#1A1D27" } }, value));
+
+  const simpleTable = (headers, rows) => React.createElement("div", { style: { overflowX: "auto" } },
+    React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 12.5 } },
+      React.createElement("thead", null, React.createElement("tr", null,
+        headers.map((h, i) => React.createElement("th", { key: i, style: { textAlign: i === 0 ? "left" : "right", padding: "8px 6px", color: "#9CA3AF", fontWeight: 700, borderBottom: "1.5px solid #EAECF2", whiteSpace: "nowrap" } }, h)))),
+      React.createElement("tbody", null, rows.map((r, ri) => React.createElement("tr", { key: ri },
+        r.map((c, ci) => React.createElement("td", { key: ci, style: { textAlign: ci === 0 ? "left" : "right", padding: "8px 6px", color: ci === 0 ? "#1A1D27" : "#374151", fontWeight: ci === 0 ? 600 : 500, borderBottom: "1px solid #F4F5F9", whiteSpace: "nowrap" } }, c)))))));
+
+  const controls = React.createElement("div", { className: "card", style: { padding: 16, marginBottom: 14 } },
+    React.createElement("div", { style: { fontWeight: 700, fontSize: 12, color: "#6B7280", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" } }, "Period"),
+    React.createElement("div", { style: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, marginBottom: 14 } },
+      PERIODS.map(p => chip(period === p.id, p.label, () => setPeriod(p.id)))),
+    React.createElement("div", { style: { fontWeight: 700, fontSize: 12, color: "#6B7280", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" } }, "Branch"),
+    React.createElement("div", { style: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, marginBottom: 16 } },
+      [chip(branchId === "all", "All Branches", () => setBranchId("all"))].concat(branches.map(b => chip(branchId === b.id, b.name, () => setBranchId(b.id))))),
+    React.createElement("button", { onClick: generate, className: "btn-primary", style: { width: "100%", padding: "14px", fontSize: 15 } }, "📊 Generate Report"));
+
+  if (!report) return React.createElement("div", null, controls,
+    React.createElement("div", { className: "card", style: { padding: 48, textAlign: "center" } },
+      React.createElement("div", { style: { fontSize: 46, marginBottom: 12 } }, "🧾"),
+      React.createElement("div", { style: { color: "#6B7280", fontSize: 14, fontWeight: 600 } }, "Pick a period and branch, then tap Generate Report"),
+      React.createElement("div", { style: { color: "#9CA3AF", fontSize: 12, marginTop: 6 } }, "A detailed report is built from your live orders")));
+
+  const o = report.overall;
+  const scopeLabel = report.branchId === "all" ? "All Branches" : branchName(report.branchId);
+
+  return React.createElement("div", { className: "fade-in" }, controls,
+    React.createElement("div", { className: "card", style: { padding: 16, marginBottom: 12, borderLeft: "4px solid #E60000" } },
+      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 } },
+        React.createElement("div", null,
+          React.createElement("div", { style: { fontWeight: 800, fontSize: 16, color: "#1A1D27" } }, scopeLabel),
+          React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 2 } }, report.periodLabel + " · generated " + (genAt ? genAt.toLocaleString("en-GB") : ""))),
+        React.createElement("div", { style: { display: "flex", gap: 8 } },
+          React.createElement("button", { onClick: downloadExcel, className: "btn-green", style: { padding: "10px 14px", fontSize: 13 } }, "⬇️ Excel"),
+          React.createElement("button", { onClick: () => window.print(), className: "btn-secondary", style: { padding: "10px 14px", fontSize: 13 } }, "🖨️ Print"))),
+      o.count === 0 && React.createElement("div", { style: { marginTop: 12, color: "#9CA3AF", fontSize: 13 } }, "No orders found for this selection.")),
+
+    o.count > 0 && React.createElement(React.Fragment, null,
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 } },
+        React.createElement(StatCard, { icon: "🧾", label: "Total Orders", value: o.count, color: "#E60000" }),
+        React.createElement(StatCard, { icon: "💰", label: "Gross Sales", value: money(o.gross), color: "#059669" }),
+        React.createElement(StatCard, { icon: "💵", label: "Net Sales", value: money(o.net), color: "#2563EB" }),
+        React.createElement(StatCard, { icon: "🧮", label: "VAT Collected", value: money(o.vat), color: "#7C3AED" }),
+        React.createElement(StatCard, { icon: "📊", label: "Avg Order", value: money(o.avg), color: "#EA580C" }),
+        React.createElement(StatCard, { icon: "🚗", label: "Delivery Fees", value: money(o.dFee), color: "#0891B2" })),
+
+      sectionCard("Order Type", React.createElement("div", null,
+        kv("🥡 Pickup", o.pickup + " orders · " + money(o.pickupRev), "#059669"),
+        kv("🚗 Delivery", o.delivery + " orders · " + money(o.deliveryRev), "#2563EB"))),
+      sectionCard("Payment Method", React.createElement("div", null,
+        kv("💵 Cash on Delivery", (o.pay.cash || 0) + " orders"),
+        kv("💳 Prepaid / Card", (o.pay.prepaid || 0) + " orders"))),
+      sectionCard("Order Status", React.createElement("div", null,
+        ["new", "preparing", "ready", "done"].map(s => kv(s.charAt(0).toUpperCase() + s.slice(1), (o.status[s] || 0) + " orders")))),
+
+      o.topItems.length > 0 && sectionCard("Top Selling Items",
+        simpleTable(["Item", "Qty", "Revenue"], o.topItems.slice(0, 10).map(it => [it.name, it.qty, money(it.rev)]))),
+
+      report.branchId === "all" && sectionCard("By Branch",
+        simpleTable(["Branch", "Orders", "Gross", "Net", "VAT"], report.perBranch.map(b => [b.name, b.m.count, money(b.m.gross), money(b.m.net), money(b.m.vat)]))),
+
+      o.dayList.length > 0 && sectionCard("Daily Breakdown",
+        simpleTable(["Date", "Orders", "Gross"], o.dayList.map(d => [d.date, d.orders, money(d.gross)]))),
+
+      o.busiest && React.createElement("div", { style: { textAlign: "center", color: "#9CA3AF", fontSize: 12, margin: "6px 0 4px" } },
+        "🔥 Busiest day: " + o.busiest.date + " (" + money(o.busiest.gross) + ")")));
+}
+
 function App() {
   const [loggedIn, setLoggedIn] = React.useState(false);
   const [password, setPassword] = React.useState("");
@@ -1118,6 +1328,7 @@ function App() {
   const tabs = [
     { id: "orders", icon: "📦", label: "Orders", badge: newCount > 0 ? newCount : null },
     { id: "analytics", icon: "📊", label: "Stats" },
+    { id: "reports", icon: "🧾", label: "Reports" },
     { id: "menu", icon: "🍗", label: "Menu" },
     { id: "coupons", icon: "🎟️", label: "Coupons" },
     { id: "customers", icon: "👥", label: "Customers" },
@@ -1266,6 +1477,7 @@ function App() {
         })()
       ),
       tab === "analytics" && React.createElement(AnalyticsTabNew, { orders: orders }),
+      tab === "reports" && React.createElement(ReportsTabNew, { orders: orders, branches: BRANCHES }),
       tab === "menu" && React.createElement(MenuTabNew, { menu: menu, setMenu: updateMenu }),
       tab === "coupons" && React.createElement(CouponsTabNew, null),
       tab === "customers" && React.createElement(CustomersTabNew, { customers: customers }),
@@ -1273,12 +1485,12 @@ function App() {
     ),
 
     // Bottom navigation
-    React.createElement("div", { style: { position: "fixed", bottom: 12, left: 12, right: 12, background: "rgba(255,255,255,0.96)", backdropFilter: "blur(20px)", border: "1px solid #EAECF2", borderRadius: 22, padding: "10px 6px", display: "flex", justifyContent: "space-around", zIndex: 200, boxShadow: "0 -2px 20px rgba(26,29,39,0.1)" } },
+    React.createElement("div", { style: { position: "fixed", bottom: 12, left: 12, right: 12, background: "rgba(255,255,255,0.96)", backdropFilter: "blur(20px)", border: "1px solid #EAECF2", borderRadius: 22, padding: "10px 6px", display: "flex", justifyContent: "space-between", flexWrap: "nowrap", overflowX: "auto", zIndex: 200, boxShadow: "0 -2px 20px rgba(26,29,39,0.1)" } },
       tabs.map(t =>
         React.createElement("button", {
           key: t.id,
           onClick: () => setTab(t.id),
-          style: { background: tab === t.id ? "#FFF1F2" : "transparent", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "6px 8px", borderRadius: 14, position: "relative", transition: "background 0.18s", minWidth: 46 }
+          style: { background: tab === t.id ? "#FFF1F2" : "transparent", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "6px 6px", borderRadius: 14, position: "relative", transition: "background 0.18s", flex: "1 0 auto", minWidth: 44 }
         },
           t.badge && React.createElement("div", { style: { position: "absolute", top: 2, right: 2, width: 17, height: 17, borderRadius: "50%", background: "#E60000", color: "#fff", fontSize: 9, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" } }, t.badge),
           React.createElement("span", { style: { fontSize: 19 } }, t.icon),
