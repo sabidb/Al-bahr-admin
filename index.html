@@ -1606,10 +1606,12 @@ function App() {
   const branchScope = profile && profile.role === "branch" ? profile.branchId : null;
 
   // Login form state
-  const [loginEmail, setLoginEmail] = React.useState("");
+  const [loginEmail, setLoginEmail] = React.useState(() => { try { return localStorage.getItem("ba_last_email") || ""; } catch(_) { return ""; } });
   const [password, setPassword]     = React.useState("");
   const [pwErr, setPwErr]           = React.useState("");
   const [busy, setBusy]             = React.useState(false);
+  const [showPw, setShowPw]         = React.useState(false);
+  const [remember, setRemember]     = React.useState(() => { try { return localStorage.getItem("ba_remember") !== "0"; } catch(_) { return true; } });
   const [tab, setTab]               = React.useState("orders");
 
   // Wire the Firebase Auth listener as soon as window.Auth is available.
@@ -1885,7 +1887,12 @@ function App() {
     if (!email || !password) { setPwErr("Enter email and password."); return; }
     setBusy(true); setPwErr("");
     try {
-      await window.Auth.signIn(email, password);
+      const signIn = window.Auth.signInRemember || window.Auth.signIn;
+      await signIn(email, password, remember);
+      try {
+        if (remember) { localStorage.setItem("ba_last_email", email); localStorage.setItem("ba_remember", "1"); }
+        else { localStorage.removeItem("ba_last_email"); localStorage.setItem("ba_remember", "0"); }
+      } catch(_){}
       setPassword("");
       // onAuthStateChanged handler loads profile + navigates.
     } catch(e) {
@@ -1904,7 +1911,13 @@ function App() {
   const doLogout = async () => {
     if (window.Auth) { try { await window.Auth.signOut(); } catch(_){} }
     setProfile(null); setAuthUser(null); setSelectedBranch(null); setOrders([]); setTab("orders");
-    setLoginEmail(""); setPassword("");
+    setPassword("");
+    // Keep the remembered email on sign-out so next login is one-tap.
+    try {
+      const rem = localStorage.getItem("ba_remember") !== "0";
+      const last = localStorage.getItem("ba_last_email") || "";
+      setLoginEmail(rem ? last : "");
+    } catch(_) { setLoginEmail(""); }
   };
 
   // Login screen (Firebase Auth — email + password)
@@ -1939,13 +1952,24 @@ function App() {
           ),
           React.createElement("div", { style: { marginBottom: 12, textAlign: "left" } },
             React.createElement("label", { style: { fontSize: 12, color: "#6B7280", fontWeight: 600, display: "block", marginBottom: 8 } }, "PASSWORD"),
-            React.createElement("input", {
-              type: "password", value: password, autoComplete: "current-password",
-              onChange: e => { setPassword(e.target.value); setPwErr(""); },
-              onKeyDown: e => e.key === "Enter" && doLogin(),
-              placeholder: "Enter your password", className: "inp",
-              style: { fontSize: 14, padding: "13px 14px", border: pwErr ? "1.5px solid #E60000" : undefined }
-            })
+            React.createElement("div", { style: { position: "relative" } },
+              React.createElement("input", {
+                type: showPw ? "text" : "password", value: password, autoComplete: "current-password",
+                onChange: e => { setPassword(e.target.value); setPwErr(""); },
+                onKeyDown: e => e.key === "Enter" && doLogin(),
+                placeholder: "Enter your password", className: "inp",
+                style: { fontSize: 14, padding: "13px 44px 13px 14px", border: pwErr ? "1.5px solid #E60000" : undefined }
+              }),
+              React.createElement("button", {
+                type: "button", onClick: () => setShowPw(v => !v), tabIndex: -1,
+                title: showPw ? "Hide password" : "Show password",
+                style: { position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 18, padding: "4px 6px", lineHeight: 1, color: "#6B7280" }
+              }, showPw ? "🙈" : "👁️")
+            )
+          ),
+          React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none", marginBottom: 12, textAlign: "left" } },
+            React.createElement("input", { type: "checkbox", checked: remember, onChange: e => setRemember(e.target.checked), style: { width: 16, height: 16, accentColor: "#E60000", cursor: "pointer" } }),
+            React.createElement("span", { style: { fontSize: 12.5, color: "#6B7280", fontWeight: 600 } }, "Remember me on this device")
           ),
           pwErr && React.createElement("div", { style: { color: "#E60000", fontSize: 12, marginBottom: 10, textAlign: "left" } }, "❌ " + pwErr),
           React.createElement("button", { onClick: doLogin, disabled: busy || authBooting, className: "btn-primary", style: { width: "100%", padding: "14px", fontSize: 15, marginTop: 4, opacity: (busy || authBooting) ? 0.6 : 1 } }, busy ? "Signing in..." : (authBooting ? "Loading..." : "Sign In →")),
@@ -2108,7 +2132,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var { initializeApp, deleteApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
       var { getFirestore, doc, getDoc, setDoc, addDoc, collection, onSnapshot, updateDoc, deleteDoc, serverTimestamp, getDocs, query, where }
         = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
-      var { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword, sendPasswordResetEmail, updatePassword }
+      var { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword, sendPasswordResetEmail, updatePassword, setPersistence, browserLocalPersistence, browserSessionPersistence }
         = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
       var _fbConfig = {
         apiKey: "AIzaSyB2PqybuRwuBjDQHgl1r9iFOC5b51r81-s",
@@ -2123,6 +2147,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var _auth = getAuth(_app);
       window.Auth = {
         signIn: function(email, pw){ return signInWithEmailAndPassword(_auth, email, pw); },
+        signInRemember: async function(email, pw, remember){
+          try { await setPersistence(_auth, remember ? browserLocalPersistence : browserSessionPersistence); } catch(_){}
+          return signInWithEmailAndPassword(_auth, email, pw);
+        },
         signOut: function(){ return signOut(_auth); },
         onChange: function(cb){ return onAuthStateChanged(_auth, cb); },
         reset: function(email){ return sendPasswordResetEmail(_auth, email); },
