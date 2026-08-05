@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.3.0";
+const APP_VERSION = "8.3.1";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -92,6 +92,7 @@ const ADMIN_STYLES = `
   .tag-green { background: #ECFDF5; color: #059669; }
   .tag-blue { background: #EFF6FF; color: #2563EB; }
   .tag-red { background: #FFF1F2; color: #E60000; }
+  .tag-purple { background: #FAF5FF; color: #9333EA; }
   .divider { height: 1px; background: #EAECF2; margin: 14px 0; }
   .metric-num { font-family: 'Sora', sans-serif; font-weight: 800; }
   .mono { font-family: 'DM Mono', monospace; }
@@ -126,12 +127,20 @@ function OrderCard({ order, onStatusChange, onAccept, onDecline, isNew }) {
   const [expanded, setExpanded] = React.useState(isNew || false);
   const statusCfg = {
     new:       { bg: "#FFF7ED", border: "#FED7AA", dot: "#F97316", label: "New",       tag: "tag-orange" },
+    pending:   { bg: "#FFF7ED", border: "#FED7AA", dot: "#F97316", label: "Pending",   tag: "tag-orange" },
+    accepted:  { bg: "#ECFEFF", border: "#A5F3FC", dot: "#0891B2", label: "Accepted",  tag: "tag-blue"   },
     preparing: { bg: "#FFFBEB", border: "#FDE68A", dot: "#D97706", label: "Preparing", tag: "tag-yellow" },
     ready:     { bg: "#F0FDF4", border: "#BBF7D0", dot: "#059669", label: "Ready",     tag: "tag-green"  },
-    done:      { bg: "#EFF6FF", border: "#BFDBFE", dot: "#2563EB", label: "Done",      tag: "tag-blue"   },
+    done:      { bg: "#EFF6FF", border: "#BFDBFE", dot: "#2563EB", label: "Completed", tag: "tag-blue"   },
+    completed: { bg: "#EFF6FF", border: "#BFDBFE", dot: "#2563EB", label: "Completed", tag: "tag-blue"   },
     cancelled: { bg: "#FEF2F2", border: "#FECACA", dot: "#DC2626", label: "Declined",  tag: "tag-red"    },
+    refunded:  { bg: "#FAF5FF", border: "#E9D5FF", dot: "#9333EA", label: "Refunded",  tag: "tag-purple" },
   };
-  const cfg = statusCfg[order.status] || statusCfg.new;
+  // Treat the legacy initial value "new" as pending and "done" as completed so
+  // historical orders and the newer 7-status pipeline render identically.
+  const _s = order.status === "new" ? "pending" : order.status === "done" ? "completed" : (order.status || "pending");
+  const cfg = statusCfg[order.status] || statusCfg[_s] || statusCfg.pending;
+  const isTerminal = _s === "completed" || _s === "cancelled" || _s === "refunded";
   const timeAgo = (() => {
     if (!order.date) return "";
     const diff = Math.floor((Date.now() - new Date(order.date)) / 1000);
@@ -204,6 +213,12 @@ function OrderCard({ order, onStatusChange, onAccept, onDecline, isNew }) {
           className: "btn-blue",
           style: { flex: 1, padding: "11px", fontSize: 13 }
         }, "🏁 Complete"),
+        // Refund is reachable only from a completed order — an explicit,
+        // owner-driven reversal that pushes a refund notification to the customer.
+        (_s === "completed") && React.createElement("button", {
+          onClick: () => { if (window.confirm("Mark order #" + order.orderNo + " as refunded? The customer is notified.")) onStatusChange(order.orderNo, "refunded"); },
+          style: { flex: 1, padding: "11px", fontSize: 13, background: "#FAF5FF", border: "1px solid #E9D5FF", color: "#9333EA", borderRadius: 12, cursor: "pointer", fontWeight: 700 }
+        }, "↩️ Refund"),
         order.userPhone && React.createElement("a", {
           href: "https://wa.me/966" + (order.userPhone||"").replace(/^0/,""),
           target: "_blank",
@@ -2532,7 +2547,9 @@ function App() {
         cancelled: { title: "Order cancelled",      titleAr: "تم إلغاء الطلب",      body: "Order #" + order.orderNo + " was cancelled. Contact us if this was a mistake.", bodyAr: "تم إلغاء طلبك #" + order.orderNo + ". تواصل معنا إذا كان بالخطأ." },
         refunded:  { title: "Refund issued",        titleAr: "تم إصدار الاسترجاع", body: "Order #" + order.orderNo + " was refunded.",                            bodyAr: "تم استرجاع طلبك #" + order.orderNo + "." },
       };
-      const msg = CUSTOMER_MSG[next];
+      // "done" is the legacy value the Complete button still writes; map it
+      // onto the completed message so finishing an order always notifies.
+      const msg = CUSTOMER_MSG[next === "done" ? "completed" : next];
       if (msg) {
         try { await window.FB.sendNotification(order.userPhone, Object.assign({ orderId: order.fbId, orderNo: order.orderNo, status: next }, msg)); } catch(_) {}
       }
