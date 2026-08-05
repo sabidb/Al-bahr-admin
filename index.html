@@ -1994,7 +1994,7 @@ function App() {
         BRANCHES.map(function(b) {
           return React.createElement("button", {
             key: b.id,
-            onClick: function() { setSelectedBranch(b.id); if(window.ThermalPrint) { window.ThermalPrint.setPrinterName("PP9000EU"); window.ThermalPrint.setBranchFilter(b.id); } },
+            onClick: function() { setSelectedBranch(b.id); if(window.ThermalPrint) { window.ThermalPrint.setBranchFilter(b.id); } },
             className: "card",
             style: { padding: "18px 20px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", border: "1.5px solid #EAECF2", background: "#fff" },
             onMouseOver: function(e) { e.currentTarget.style.borderColor = "#E60000"; e.currentTarget.style.background = "#FFF1F2"; },
@@ -2206,15 +2206,28 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
   // ── QZ Tray Thermal Print Module ──────────────────────────
   window.ThermalPrint = (function () {
 
-    // ── Config ──────────────────────────────────────────────
-    var PRINTER_NAME = "PP9000EU";  // thermal printer name
-    var AUTO_PRINT   = true;        // auto-print every new order
-    var COPIES       = 1;           // number of copies per order
-    var PRINTED_IDS  = new Set();   // avoid double-printing same order
-    var FIRST_LOAD   = true;        // skip existing orders on first load
-    var BRANCH_FILTER = "";         // set by branch selection — only print matching branch
+    // ── Persistent config (localStorage) ─────────────────────
+    var LS_KEY = "ba_print_cfg_v1";
+    function loadCfg() {
+      try { var s = localStorage.getItem(LS_KEY); if (s) return JSON.parse(s); } catch(e){}
+      return null;
+    }
+    function saveCfg() {
+      try { localStorage.setItem(LS_KEY, JSON.stringify({
+        printerName: PRINTER_NAME, copies: COPIES, autoPrint: AUTO_PRINT, printerMap: PRINTER_MAP
+      })); } catch(e){}
+    }
 
-    var statusEl = null;            // small status badge in the UI
+    var _saved = loadCfg() || {};
+    var PRINTER_NAME = _saved.printerName || "PP9000EU";  // default / fallback printer
+    var AUTO_PRINT   = _saved.autoPrint !== false;         // auto-print every new order
+    var COPIES       = _saved.copies || 1;                 // number of copies per order
+    var PRINTER_MAP  = _saved.printerMap || {};            // { kakkiyah:"PP9000EU-1", subhani:"...", waliy:"..." }
+    var PRINTED_IDS  = new Set();                          // avoid double-printing same order
+    var FIRST_LOAD   = true;                               // skip existing orders on first load
+    var BRANCH_FILTER = "";                                // set by branch selection — only print matching branch
+
+    var statusEl = null;
 
     // ── Connect to QZ Tray ──────────────────────────────────
     function connect() {
@@ -2238,7 +2251,14 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       }).catch(function (err) {
         showStatus("QZ Tray offline", "warn");
         console.warn("QZ Tray not available:", err);
+        throw err;
       });
+    }
+
+    function printerFor(order) {
+      var b = order && order.branch;
+      if (b && PRINTER_MAP[b]) return PRINTER_MAP[b];
+      return PRINTER_NAME || "";
     }
 
     // ── Build ESC/POS receipt ───────────────────────────────
@@ -2342,51 +2362,75 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     }
 
     // ── Send to printer ─────────────────────────────────────
-    function printOrder(order) {
-      return connect().then(function () {
-        return qz.printers.find(PRINTER_NAME || "");
-      }).then(function (printer) {
+    // Uses ESC/POS raw mode, which QZ Tray sends silently (no OS print dialog).
+    function _doPrint(order) {
+      var target = printerFor(order);
+      return qz.printers.find(target).then(function (printer) {
         var actualPrinter = Array.isArray(printer) ? printer[0] : printer;
-        if (!actualPrinter) throw new Error("No printer found");
+        if (!actualPrinter) throw new Error("Printer not found: " + target);
 
-        var config = qz.configs.create(actualPrinter, { copies: COPIES });
+        // Silent raw print — no dialog, direct ESC/POS bytes to the thermal head.
+        var config = qz.configs.create(actualPrinter, {
+          copies: COPIES,
+          rasterize: false,
+          altPrinting: false
+        });
         var data = [{
           type: "raw",
           format: "plain",
           data: buildReceipt(order)
         }];
         return qz.print(config, data);
+      });
+    }
+    function printOrder(order) {
+      return connect().then(function () {
+        return _doPrint(order);
       }).then(function () {
         console.log("✅ Printed order #" + order.orderNo);
         showStatus("✅ Printed #" + order.orderNo, "ok");
-        PRINTED_IDS.add(order.orderNo);
+        PRINTED_IDS.add(_dedupKey(order));
       }).catch(function (err) {
-        console.error("Print error:", err);
-        showStatus("❌ Print failed", "error");
+        console.warn("Print attempt 1 failed:", err && err.message || err);
+        // One retry after a short back-off, in case the WS reconnects mid-flight.
+        return new Promise(function (r) { setTimeout(r, 1500); })
+          .then(function () { return connect(); })
+          .then(function () { return _doPrint(order); })
+          .then(function () {
+            console.log("✅ Printed order #" + order.orderNo + " (retry)");
+            showStatus("✅ Printed #" + order.orderNo, "ok");
+            PRINTED_IDS.add(_dedupKey(order));
+          })
+          .catch(function (err2) {
+            console.error("Print failed after retry:", err2);
+            showStatus("❌ Print failed #" + order.orderNo, "error");
+          });
       });
     }
 
     // ── Auto-print hook (called from orders listener) ───────
+    function _dedupKey(o) { return o.fbId || o.orderNo || ""; }
+
     function handleIncomingOrders(orders) {
       if (!AUTO_PRINT) return;
 
       // On first load, mark ALL existing orders as already printed
       // so we only print orders that arrive AFTER the page opens
       if (FIRST_LOAD) {
-        orders.forEach(function (o) { PRINTED_IDS.add(o.orderNo); });
+        orders.forEach(function (o) { PRINTED_IDS.add(_dedupKey(o)); });
         FIRST_LOAD = false;
         return;
       }
 
       orders.filter(function (o) {
-        // Only print if status is new and not already printed
         if (o.status !== "new") return false;
-        if (PRINTED_IDS.has(o.orderNo)) return false;
+        if (PRINTED_IDS.has(_dedupKey(o))) return false;
         // Only print orders matching this branch (skip if owner view)
         if (BRANCH_FILTER && BRANCH_FILTER !== "all" && o.branch !== BRANCH_FILTER) return false;
         return true;
-      }).forEach(function (o) {
-        setTimeout(function () { printOrder(o); }, 400);
+      }).forEach(function (o, i) {
+        // Stagger prints slightly so bursts don't overwhelm the printer.
+        setTimeout(function () { printOrder(o); }, 400 + i * 250);
       });
     }
 
@@ -2431,10 +2475,84 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         "background:rgba(255,255,255,0.96);backdrop-filter:blur(20px)",
         "border:1px solid #EAECF2;border-radius:18px;box-shadow:0 6px 20px rgba(16,24,40,0.12)",
         "display:flex;align-items:center;gap:10px;padding:7px 16px",
-        "font-family:Plus Jakarta Sans,sans-serif;font-size:12px;color:#6B7280"
+        "font-family:Plus Jakarta Sans,sans-serif;font-size:12px;color:#6B7280;cursor:pointer"
       ].join(";");
+      barEl.title = "Click to configure printer";
+      barEl.addEventListener("click", openSettings);
       document.body.appendChild(barEl);
       updateBar("connecting", "");
+    }
+
+    // ── Printer Settings modal ──────────────────────────────
+    function openSettings() {
+      var existing = document.getElementById("qz-settings");
+      if (existing) { existing.remove(); return; }
+      var wrap = document.createElement("div");
+      wrap.id = "qz-settings";
+      wrap.style.cssText = "position:fixed;inset:0;background:rgba(16,24,40,0.55);z-index:99999;display:flex;align-items:center;justify-content:center;font-family:Plus Jakarta Sans,sans-serif";
+      wrap.addEventListener("click", function(e){ if (e.target === wrap) wrap.remove(); });
+
+      function row(label, key, ph) {
+        var val = key === "default" ? PRINTER_NAME : (PRINTER_MAP[key] || "");
+        return "<div style='margin-bottom:10px'>" +
+               "<label style='display:block;font-size:11px;color:#6B7280;margin-bottom:4px;font-weight:600'>" + label + "</label>" +
+               "<input data-key='" + key + "' value='" + val.replace(/'/g,"&#39;") + "' placeholder='" + ph + "' " +
+               "style='width:100%;padding:9px 11px;border:1px solid #E5E7EB;border-radius:8px;font-size:13px;outline:none' />" +
+               "</div>";
+      }
+
+      wrap.innerHTML = "<div style='background:#fff;border-radius:16px;width:min(420px,92vw);padding:22px;box-shadow:0 20px 60px rgba(16,24,40,0.25)'>" +
+        "<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:14px'>" +
+          "<div style='font-size:16px;font-weight:800;color:#111827'>🖨️ Printer Settings</div>" +
+          "<button id='qz-close' style='border:none;background:#F3F4F6;width:28px;height:28px;border-radius:8px;cursor:pointer;font-weight:700'>×</button>" +
+        "</div>" +
+        row("Default printer (fallback)", "default", "e.g. PP9000EU") +
+        row("Kakkiyah branch printer", "kakkiyah", "leave blank to use default") +
+        row("Subhani branch printer",  "subhani",  "leave blank to use default") +
+        row("Waliy Al Ahd branch printer", "waliy", "leave blank to use default") +
+        "<div style='display:flex;gap:12px;margin:6px 0 14px'>" +
+          "<div style='flex:1'>" +
+            "<label style='display:block;font-size:11px;color:#6B7280;margin-bottom:4px;font-weight:600'>Copies</label>" +
+            "<input id='qz-copies' type='number' min='1' max='9' value='" + COPIES + "' " +
+            "style='width:100%;padding:9px 11px;border:1px solid #E5E7EB;border-radius:8px;font-size:13px;outline:none' />" +
+          "</div>" +
+          "<div style='flex:1;display:flex;align-items:end'>" +
+            "<label style='display:flex;align-items:center;gap:8px;font-size:13px;color:#111827;font-weight:600;cursor:pointer'>" +
+              "<input id='qz-auto' type='checkbox' " + (AUTO_PRINT ? "checked" : "") + " /> Auto-print new orders" +
+            "</label>" +
+          "</div>" +
+        "</div>" +
+        "<div style='display:flex;gap:8px'>" +
+          "<button id='qz-test' style='flex:1;padding:11px;border:1px solid #FED7AA;background:#FFF7ED;color:#EA580C;font-weight:700;border-radius:10px;cursor:pointer;font-size:13px'>🖨️ Test print</button>" +
+          "<button id='qz-save' style='flex:1;padding:11px;border:none;background:#E60000;color:#fff;font-weight:800;border-radius:10px;cursor:pointer;font-size:13px'>Save</button>" +
+        "</div>" +
+        "<div style='margin-top:12px;font-size:11px;color:#9CA3AF;line-height:1.5'>Printer names must match exactly what QZ Tray sees. Silent raw ESC/POS mode (no OS dialog).</div>" +
+      "</div>";
+      document.body.appendChild(wrap);
+      wrap.querySelector("#qz-close").onclick = function(){ wrap.remove(); };
+      wrap.querySelector("#qz-save").onclick = function(){
+        var inputs = wrap.querySelectorAll("input[data-key]");
+        inputs.forEach(function(i){
+          var k = i.getAttribute("data-key"); var v = (i.value||"").trim();
+          if (k === "default") PRINTER_NAME = v || "PP9000EU";
+          else { if (v) PRINTER_MAP[k] = v; else delete PRINTER_MAP[k]; }
+        });
+        COPIES = Math.max(1, parseInt(wrap.querySelector("#qz-copies").value,10)||1);
+        AUTO_PRINT = wrap.querySelector("#qz-auto").checked;
+        saveCfg();
+        showStatus("✅ Printer settings saved", "ok");
+        wrap.remove();
+      };
+      wrap.querySelector("#qz-test").onclick = function(){
+        var sample = {
+          orderNo: "TEST", branch: BRANCH_FILTER && BRANCH_FILTER !== "all" ? BRANCH_FILTER : "kakkiyah",
+          orderType: "pickup", paymentMethod: "cash",
+          userName: "Test Print", userPhone: "0500000000",
+          items: [{ emoji: "🍗", name: "Test Item", qty: 1, price: 10 }],
+          total: 10
+        };
+        printOrder(sample);
+      };
     }
 
     function updateBar(state, printerName) {
@@ -2446,7 +2564,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
                 "&nbsp;&nbsp;|&nbsp;&nbsp;" +
                 "<span style='color:#FFC400'>🖨️ " + printerName + "</span>" +
                 "&nbsp;&nbsp;|&nbsp;&nbsp;" +
-                "<span style='color:#9A9A9A'>Auto-print: ON</span>";
+                "<span style='color:#9A9A9A'>Auto-print: " + (AUTO_PRINT ? "ON" : "OFF") + "</span>" +
+                "&nbsp;&nbsp;|&nbsp;&nbsp;" +
+                "<span style='color:#6B7280;text-decoration:underline'>⚙ Configure</span>";
       } else if (state === "offline") {
         label = "<span style='color:#E60000;font-weight:700'>● QZ Tray Offline</span>" +
                 "&nbsp;&nbsp;|&nbsp;&nbsp;" +
@@ -2536,11 +2656,18 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     return {
       connect: connect,
       print: printOrder,
-      setAutoPrint: function (v) { AUTO_PRINT = v; },
-      setPrinterName: function (n) { PRINTER_NAME = n; },
-      setCopies: function (n) { COPIES = n; },
+      openSettings: openSettings,
+      setAutoPrint: function (v) { AUTO_PRINT = !!v; saveCfg(); },
+      setPrinterName: function (n) { PRINTER_NAME = n || "PP9000EU"; saveCfg(); },
+      setBranchPrinter: function (branch, name) {
+        if (!branch) return;
+        if (name) PRINTER_MAP[branch] = name; else delete PRINTER_MAP[branch];
+        saveCfg();
+      },
+      setCopies: function (n) { COPIES = Math.max(1, parseInt(n,10)||1); saveCfg(); },
       setBranchFilter: function (b) { BRANCH_FILTER = b; console.log("🖨️ Print filter set to branch: " + b); },
-      getStatus: function () { return qz && qz.websocket.isActive(); }
+      getStatus: function () { return qz && qz.websocket.isActive(); },
+      getConfig: function () { return { printerName: PRINTER_NAME, copies: COPIES, autoPrint: AUTO_PRINT, printerMap: Object.assign({}, PRINTER_MAP) }; }
     };
   })();
   </script>
