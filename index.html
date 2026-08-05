@@ -678,6 +678,209 @@ function PrinterSetup({ isOwner, branches, branchScope }) {
   );
 }
 
+// ── INVOICE / RECEIPT CUSTOMIZATION ──
+// Global defaults + per-branch overrides stored under settings/invoiceConfig:
+//   { global: {...}, byBranch: { kakkiyah: {...}, subhani: {...}, waliy: {...} } }
+// Managers see only their own branch overrides + read-only global; owner
+// edits both. Save is per-scope so a manager cannot clobber another branch's
+// template.
+function InvoiceSetup({ isOwner, branches, branchScope }) {
+  const DEFAULTS = (window.ThermalPrint && window.ThermalPrint.getInvoiceDefaults) ? window.ThermalPrint.getInvoiceDefaults() : {};
+  const [cfg, setCfg] = React.useState({ global: {}, byBranch: {} });
+  const [scope, setScope] = React.useState(isOwner ? "global" : (branchScope || (branches && branches[0] && branches[0].id) || "global"));
+  const [saved, setSaved] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!window.FB || !window.FB.getInvoiceConfig) { setLoading(false); return; }
+      const c = await window.FB.getInvoiceConfig();
+      if (!cancelled) {
+        setCfg({ global: (c && c.global) || {}, byBranch: (c && c.byBranch) || {} });
+        setLoading(false);
+      }
+    })();
+    let unsub;
+    if (window.FB && window.FB.onInvoiceConfigChange) {
+      unsub = window.FB.onInvoiceConfigChange((c) => {
+        if (!c) return;
+        setCfg({ global: c.global || {}, byBranch: c.byBranch || {} });
+        if (window.ThermalPrint && window.ThermalPrint.setInvoiceConfig) window.ThermalPrint.setInvoiceConfig(c);
+      });
+    }
+    return () => { cancelled = true; if (unsub) { try { unsub(); } catch (_) {} } };
+  }, []);
+
+  // The current merged view — defaults ← global ← branch overrides.
+  const effective = React.useMemo(() => {
+    if (scope === "global") return Object.assign({}, DEFAULTS, cfg.global || {});
+    return Object.assign({}, DEFAULTS, cfg.global || {}, (cfg.byBranch && cfg.byBranch[scope]) || {});
+  }, [cfg, scope]);
+
+  const setField = (k, v) => setCfg(prev => {
+    const next = { global: Object.assign({}, prev.global || {}), byBranch: Object.assign({}, prev.byBranch || {}) };
+    if (scope === "global") next.global[k] = v;
+    else { next.byBranch[scope] = Object.assign({}, next.byBranch[scope] || {}, { [k]: v }); }
+    return next;
+  });
+
+  const clearBranchOverride = (k) => setCfg(prev => {
+    const next = { global: prev.global || {}, byBranch: Object.assign({}, prev.byBranch || {}) };
+    const b = Object.assign({}, next.byBranch[scope] || {}); delete b[k];
+    next.byBranch[scope] = b;
+    return next;
+  });
+
+  const save = async () => {
+    if (!window.FB || !window.FB.saveInvoiceConfig) return;
+    await window.FB.saveInvoiceConfig(cfg);
+    if (window.ThermalPrint && window.ThermalPrint.setInvoiceConfig) window.ThermalPrint.setInvoiceConfig(cfg);
+    setSaved(true); setTimeout(() => setSaved(false), 2200);
+  };
+
+  const testPrint = () => {
+    if (!window.ThermalPrint) { alert("Printer bridge not loaded."); return; }
+    const branchId = scope === "global" ? (branchScope || (branches && branches[0] && branches[0].id) || "kakkiyah") : scope;
+    window.ThermalPrint.print({
+      orderNo: "100000", branch: branchId,
+      orderType: "pickup", paymentMethod: "cash",
+      userName: "Preview Customer", userPhone: "0500000000",
+      items: [{ emoji: "🍗", name: "Broast 4 Pcs", nameAr: "بروست 4 قطع", qty: 1, price: 18 },
+              { emoji: "🍟", name: "French Fries", nameAr: "بطاطس", qty: 1, price: 6 }],
+      subtotal: 24, platformFee: 0.72, vat: 3.71, total: 28.43,
+      date: new Date().toISOString()
+    });
+  };
+
+  // ── Small form primitives ────────────────────────────────
+  const overriddenAtBranch = (k) => scope !== "global" && cfg.byBranch && cfg.byBranch[scope] && Object.prototype.hasOwnProperty.call(cfg.byBranch[scope], k);
+
+  const textRow = (label, key, ph, opts) => React.createElement("div", { style: { marginBottom: 12 } },
+    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 } },
+      React.createElement("label", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700 } }, label),
+      overriddenAtBranch(key) && React.createElement("button", { onClick: () => clearBranchOverride(key), style: { background: "transparent", border: "none", color: "#E60000", fontSize: 10, fontWeight: 700, cursor: "pointer" } }, "↻ reset to global")
+    ),
+    React.createElement("input", { className: "inp", value: effective[key] == null ? "" : effective[key], onChange: e => setField(key, e.target.value), placeholder: ph || "" })
+  );
+
+  const numRow = (label, key, ph) => React.createElement("div", { style: { marginBottom: 12 } },
+    React.createElement("label", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700, display: "block", marginBottom: 5 } }, label),
+    React.createElement("input", { className: "inp", type: "number", value: effective[key] == null ? "" : effective[key], onChange: e => setField(key, Number(e.target.value) || 0), placeholder: ph || "" })
+  );
+
+  const toggleRow = (label, sub, key) => React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #F3F4F6" } },
+    React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+      React.createElement("div", { style: { fontWeight: 600, fontSize: 13, color: "#1A1D27" } }, label),
+      sub && React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginTop: 2 } }, sub)
+    ),
+    React.createElement("input", { type: "checkbox", checked: effective[key] !== false, onChange: e => setField(key, e.target.checked), style: { width: 20, height: 20, accentColor: "#059669", cursor: "pointer", marginLeft: 12 } })
+  );
+
+  const contactLinesText = (effective.contactLines || []).join("\n");
+
+  return React.createElement("div", null,
+    saved && React.createElement("div", { style: { background: "#ECFDF5", border: "1px solid #BBF7D0", color: "#059669", padding: "12px 14px", borderRadius: 12, marginBottom: 14, fontWeight: 700, fontSize: 13 } }, "✅ Invoice template saved — next print uses it"),
+
+    // Scope picker
+    isOwner && React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 14, overflowX: "auto", paddingBottom: 4 } },
+      [{ id: "global", name: "🌐 Global default" }].concat((branches || []).map(b => ({ id: b.id, name: "🏪 " + b.name }))).map(s => {
+        const active = scope === s.id;
+        return React.createElement("button", {
+          key: s.id, onClick: () => setScope(s.id),
+          style: { padding: "8px 14px", borderRadius: 20, border: "1.5px solid " + (active ? "#E60000" : "#EAECF2"), background: active ? "#FFF1F2" : "#fff", color: active ? "#E60000" : "#6B7280", fontSize: 12, fontWeight: active ? 700 : 500, cursor: "pointer", whiteSpace: "nowrap" }
+        }, s.name);
+      })
+    ),
+    !isOwner && React.createElement("div", { className: "card", style: { padding: "10px 14px", marginBottom: 14, background: "#FFF7ED", border: "1px solid #FED7AA", fontSize: 12, color: "#9A3412", fontWeight: 600 } },
+      "🏪 Editing invoice for: ", React.createElement("b", null, (branches && branches.find(b => b.id === branchScope) || {}).name || branchScope || "-")),
+
+    loading && React.createElement("div", { className: "card", style: { padding: 16, marginBottom: 12, fontSize: 12, color: "#6B7280" } }, "Loading current template…"),
+
+    // Header
+    React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 12 } }, "🧾 Header"),
+      textRow("BUSINESS NAME (top of receipt)", "header", "e.g. BROAST ALBAHR"),
+      textRow("TAGLINE (small line under name)", "tagline", "e.g. Since 2010"),
+      textRow("BRANCH SUFFIX", "branchSuffix", "e.g.  Branch"),
+      toggleRow("Show branch name", "Prints e.g. \"Kakkiyah Branch\" under the business name", "showBranchName")
+    ),
+
+    // Body toggles
+    React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 8 } }, "📄 Body sections"),
+      toggleRow("Order number", "e.g. Order: #100000", "showOrderNo"),
+      toggleRow("Order type", "Pickup / Delivery line", "showType"),
+      toggleRow("Date & time", "", "showDate"),
+      toggleRow("Customer block", "Name, phone, payment method", "showCustomer"),
+      toggleRow("Customer phone", "", "showPhone"),
+      toggleRow("Payment method", "", "showPayment"),
+      toggleRow("Delivery location link", "Delivery orders only", "showLocation"),
+      toggleRow("Items list", "", "showItems"),
+      toggleRow("Item Arabic name", "Show item.nameAr under each line", "showItemArabic"),
+      toggleRow("Subtotal / fee breakdown", "Subtotal, platform fee, delivery, VAT", "showSubtotalBreakdown")
+    ),
+
+    // Loyalty
+    React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 12 } }, "⭐ Loyalty"),
+      toggleRow("Show loyalty block", "", "showLoyalty"),
+      textRow("LOYALTY LABEL", "loyaltyLabel", "Loyalty Points")
+    ),
+
+    // Tax IDs
+    React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 12 } }, "🧮 Tax IDs (ZATCA / VAT)"),
+      toggleRow("Print Tax#", "", "showTaxNumber"),
+      textRow("TAX NUMBER", "taxNumber", "3xxxxxxxxx"),
+      toggleRow("Print VAT#", "", "showVatNumber"),
+      textRow("VAT NUMBER", "vatNumber", "3xxxxxxxxx0003")
+    ),
+
+    // Contact
+    React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 12 } }, "☎️ Contact block"),
+      toggleRow("Show contact block", "", "showBranchPhones"),
+      textRow("HEADING", "contactHeader", "Contact Us"),
+      React.createElement("div", { style: { marginBottom: 12 } },
+        React.createElement("label", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700, display: "block", marginBottom: 5 } }, "CONTACT LINES (one per line)"),
+        React.createElement("textarea", { value: contactLinesText, onChange: e => setField("contactLines", e.target.value.split(/\r?\n/).filter(Boolean)), rows: 4, className: "inp", style: { resize: "vertical", fontFamily: "monospace", fontSize: 12 }, placeholder: "Kakkiyah:     0500959394\nSubhani:      0508379339\nWaliy Al Ahd: 0550061771" })
+      )
+    ),
+
+    // Footer
+    React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 12 } }, "🙏 Footer"),
+      textRow("PROMO LINE", "promoLine", "e.g. Use code ALBAHR10 for 10% off"),
+      textRow("FOOTER LINE 1", "footerLine1", "Thank you for your order!"),
+      textRow("FOOTER LINE 2", "footerLine2", "TikTok: @brustalbahr"),
+      textRow("FOOTER LINE 3", "footerLine3", "Follow us for offers!")
+    ),
+
+    // Paper geometry
+    React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 12 } }, "📏 Paper"),
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } },
+        numRow("PAPER WIDTH (chars)", "paperWidth", "32 for 58mm · 42 for 72mm · 48 for 80mm"),
+        numRow("FEED LINES BEFORE CUT", "feedLines", "3")
+      ),
+      toggleRow("Auto cut", "ESC/POS thermal only. On Windows fallback the driver handles cut.", "autoCut")
+    ),
+
+    // Save + preview
+    React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 14 } },
+      React.createElement("button", { onClick: testPrint, className: "btn-secondary", style: { flex: 1, padding: "13px", fontSize: 13 } }, "🖨️ Preview print"),
+      React.createElement("button", { onClick: save, className: "btn-primary", style: { flex: 2, padding: "13px", fontSize: 14, fontWeight: 800 } }, "💾 Save invoice template")
+    ),
+
+    React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", marginTop: 12, lineHeight: 1.55, padding: "0 4px" } },
+      isOwner
+        ? "Owner tip: Global default applies to every branch. Branch overrides only overwrite the fields you actually change on that branch — click ↻ to fall back to the global value."
+        : "Manager tip: your changes only affect receipts for your branch. Fields you don't touch keep the owner's global default."
+    )
+  );
+}
+
 function SettingsTabNew(props) {
   const settingsIsOwner = !!(props && props.isOwner);
   const settingsBranches = (props && props.branches) || [];
@@ -732,6 +935,7 @@ function SettingsTabNew(props) {
     { id: "general", label: "General" },
     { id: "orders", label: "Orders" },
     { id: "printer", label: "Printer" },
+    { id: "invoice", label: "Invoice" },
     { id: "branches", label: "Branches" },
     { id: "system", label: "System" },
   ];
@@ -824,6 +1028,9 @@ function SettingsTabNew(props) {
     // Printer section
     section === "printer" && React.createElement(PrinterSetup, { isOwner: settingsIsOwner, branches: settingsBranches, branchScope: settingsBranchScope }),
 
+    // Invoice section
+    section === "invoice" && React.createElement(InvoiceSetup, { isOwner: settingsIsOwner, branches: settingsBranches, branchScope: settingsBranchScope }),
+
     // Branches section
     section === "branches" && React.createElement("div", null,
       [
@@ -875,8 +1082,8 @@ function SettingsTabNew(props) {
       )
     ),
 
-    // Save button (hidden on the Printer section — it has its own Save)
-    section !== "printer" && React.createElement("button", {
+    // Save button (hidden on Printer / Invoice sections — each has its own Save)
+    section !== "printer" && section !== "invoice" && React.createElement("button", {
       onClick: saveAll,
       className: "btn-primary",
       style: { width: "100%", padding: "16px", fontSize: 15, marginTop: 16 }
@@ -2028,6 +2235,13 @@ function App() {
   const [orderFilter, setOrderFilter] = React.useState("all");
   const [fbConnected, setFbConnected] = React.useState(false);
   const [bellAnim, setBellAnim] = React.useState(false);
+  // Kept in a ref so the onOrdersChange listener always reads the current
+  // toggle without needing to re-subscribe when the setting changes.
+  const autoAcceptRef = React.useRef(false);
+  // fbIds we've seen since this session opened — anything already known
+  // was placed before startup and should never be auto-accepted.
+  const seenOnLoadRef = React.useRef(null);
+  const autoAcceptedRef = React.useRef(new Set());
   const ADMIN_PASSWORD = "albahr2024";
   const BRANCHES = [
     { id: "kakkiyah", name: "Kakkiyah", nameAr: "الكعكية", phone: "0500959394" },
@@ -2070,6 +2284,25 @@ function App() {
         if (fbMenu) setMenu(fbMenu);
         unsubMenu = window.FB.onMenuChange(m => { if (m) setMenu(m); });
         unsubCustomers = window.FB.onCustomersChange(c => setCustomers(c));
+        // Load invoice template + subscribe so ThermalPrint always renders
+        // the manager's latest layout, even before Settings is opened.
+        try {
+          const invCfg = await window.FB.getInvoiceConfig();
+          if (invCfg && window.ThermalPrint) window.ThermalPrint.setInvoiceConfig(invCfg);
+        } catch(_) {}
+        if (window.FB.onInvoiceConfigChange) {
+          const _u = window.FB.onInvoiceConfigChange(c => { if (c && window.ThermalPrint) window.ThermalPrint.setInvoiceConfig(c); });
+          if (!window.__invUnsub) window.__invUnsub = _u;
+        }
+        // Restaurant settings drive the auto-accept + auto-print toggle.
+        try {
+          const s = await window.FB.getSettings();
+          if (s && typeof s.autoAccept !== "undefined") autoAcceptRef.current = !!s.autoAccept;
+        } catch(_) {}
+        if (window.FB.onSettingsChange) {
+          const _u = window.FB.onSettingsChange(s => { if (s) autoAcceptRef.current = !!s.autoAccept; });
+          if (!window.__setUnsub) window.__setUnsub = _u;
+        }
         unsubOrders = window.FB.onOrdersChange(fbOrders => {
           // Deduplicate by fbId to prevent double orders
           const seen = new Set();
@@ -2100,11 +2333,35 @@ function App() {
           setOrders(filtered);
           const newOnes = filtered.filter(o => o.status === "new");
           if (newOnes.length > 0) {
-            setNewOrderAlert(true);
             setBellAnim(true);
             setTimeout(() => setBellAnim(false), 1000);
           }
           setFbConnected(true);
+
+          // First snapshot after login records "already there" ids so
+          // auto-accept never fires for pre-existing orders.
+          if (seenOnLoadRef.current === null) {
+            const s = new Set();
+            filtered.forEach(o => s.add(o.fbId || o.orderNo));
+            seenOnLoadRef.current = s;
+            return;
+          }
+          // If the operator turned on Auto Accept in Settings, every fresh
+          // "new" order that arrives after startup goes straight to
+          // preparing + print, no click needed.
+          if (autoAcceptRef.current) {
+            newOnes.forEach(o => {
+              const key = o.fbId || o.orderNo;
+              if (seenOnLoadRef.current.has(key)) return;
+              if (autoAcceptedRef.current.has(key)) return;
+              autoAcceptedRef.current.add(key);
+              seenOnLoadRef.current.add(key);
+              // Fire and forget — handleAcceptOrder prints + updates status.
+              handleAcceptOrder(o);
+            });
+          } else {
+            newOnes.forEach(o => seenOnLoadRef.current.add(o.fbId || o.orderNo));
+          }
         });
       } catch(e) { console.log("Firebase admin err:", e); }
     })();
@@ -2500,6 +2757,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         onSettingsChange: function(cb){ return onSnapshot(doc(_db,"settings","restaurant"),function(s){ if(s.exists())cb(s.data()); }); },
         onOrdersChange: function(cb){ return onSnapshot(collection(_db,"orders"),function(s){ var o=s.docs.map(function(d){ return Object.assign({fbId:d.id},d.data()); }); o.sort(function(a,b){ return ((b.createdAt&&b.createdAt.seconds)||0)-((a.createdAt&&a.createdAt.seconds)||0); }); cb(o); }); },
         onCustomersChange: function(cb){ return onSnapshot(collection(_db,"customers"),function(s){ cb(s.docs.map(function(d){ return Object.assign({id:d.id},d.data()); })); }); },
+        // Invoice/receipt template config. One document, keyed internally by branchId.
+        //   { global: {...defaults}, byBranch: { kakkiyah: {...overrides}, subhani: {...}, waliy: {...} } }
+        getInvoiceConfig: async function(){ try{ var s=await getDoc(doc(_db,"settings","invoiceConfig")); return s.exists()?s.data():null; }catch(e){ return null; } },
+        saveInvoiceConfig: async function(cfg){ try{ await setDoc(doc(_db,"settings","invoiceConfig"),Object.assign({},cfg,{updatedAt:serverTimestamp()}),{merge:true}); return true; }catch(e){ window.__fbErr("invoice config",e); return false; } },
+        onInvoiceConfigChange: function(cb){ return onSnapshot(doc(_db,"settings","invoiceConfig"),function(s){ cb(s.exists()?s.data():null); }); },
         getUserProfile: async function(uid){ try{ var s=await getDoc(doc(_db,"users",uid)); return s.exists()?s.data():null; }catch(e){ return null; } },
         listStaff: async function(){ try{ var snap=await getDocs(collection(_db,"users")); return snap.docs.map(function(d){ return Object.assign({uid:d.id},d.data()); }); }catch(e){ return []; } },
         deleteStaff: async function(uid){ try{ await deleteDoc(doc(_db,"users",uid)); return true; }catch(e){ window.__fbErr("staff",e); return false; } },
@@ -2572,8 +2834,60 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       return PRINTER_NAME || "";
     }
 
+    // ── Invoice config ──────────────────────────────────────
+    // Global defaults + per-branch overrides. Loaded once from Firestore
+    // (settings/invoiceConfig) and refreshed via an onSnapshot listener.
+    var INVOICE_DEFAULTS = {
+      header: "BROAST ALBAHR",
+      tagline: "",                 // e.g. "Since 2010"
+      showBranchName: true,
+      branchSuffix: " Branch",
+      showOrderNo: true,
+      showType: true,
+      showDate: true,
+      showCustomer: true,
+      showPhone: true,
+      showPayment: true,
+      showLocation: true,          // delivery only
+      showItems: true,
+      showItemArabic: false,
+      showSubtotalBreakdown: false,// subtotal + fees + VAT lines
+      showLoyalty: true,
+      loyaltyLabel: "Loyalty Points",
+      loyaltyPerRule: null,        // null = default 5/10/20/35 tiered
+      showBranchPhones: true,
+      contactHeader: "Contact Us",
+      contactLines: [              // free-form contact block
+        "Kakkiyah:     0500959394",
+        "Subhani:      0508379339",
+        "Waliy Al Ahd: 0550061771"
+      ],
+      showTaxNumber: false,
+      taxNumber: "",
+      showVatNumber: false,
+      vatNumber: "",
+      footerLine1: "Thank you for your order!",
+      footerLine2: "TikTok: @brustalbahr",
+      footerLine3: "Follow us for offers!",
+      promoLine: "",
+      paperWidth: 32,              // 32 for 58mm, 42 for 72mm, 48 for 80mm
+      feedLines: 3,
+      autoCut: true
+    };
+    var INVOICE_CFG = { global: {}, byBranch: {} };
+    function resolveConfig(branchId) {
+      var g = Object.assign({}, INVOICE_DEFAULTS, INVOICE_CFG.global || {});
+      var b = (INVOICE_CFG.byBranch && INVOICE_CFG.byBranch[branchId]) || {};
+      return Object.assign({}, g, b);
+    }
+    function setInvoiceConfig(newCfg) {
+      if (!newCfg) return;
+      INVOICE_CFG = { global: newCfg.global || {}, byBranch: newCfg.byBranch || {} };
+    }
+
     // ── Build ESC/POS receipt ───────────────────────────────
     function buildReceipt(order) {
+      var C = resolveConfig(order.branch);
       var ESC  = "\x1B";
       var GS   = "\x1D";
       var LF   = "\n";
@@ -2581,95 +2895,204 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var BOLD_OFF  = ESC + "E\x00";
       var CENTER    = ESC + "a\x01";
       var LEFT      = ESC + "a\x00";
-      var RIGHT     = ESC + "a\x02";
       var BIG       = GS  + "!\x11";
       var NORMAL    = GS  + "!\x00";
       var CUT       = GS  + "V\x42\x00";
 
-      var W = 32;
+      var W = Math.max(24, Math.min(64, Number(C.paperWidth) || 32));
       function line(ch) { return ch.repeat(W) + LF; }
-      function pad(left, right) {
-        var gap = W - left.length - right.length;
-        if (gap < 1) gap = 1;
-        return left + " ".repeat(gap) + right;
-      }
-      function cen(text) {
-        var p = Math.max(0, Math.floor((W - text.length) / 2));
-        return " ".repeat(p) + text;
-      }
+      function pad(l, r) { var g = W - l.length - r.length; if (g < 1) g = 1; return l + " ".repeat(g) + r; }
 
       var date = new Date();
       var timeStr = date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
       var dateStr = date.toLocaleDateString("en-GB");
 
       var branchMap = { kakkiyah: "Kakkiyah", subhani: "Subhani", waliy: "Waliy Al Ahd" };
-      var branchPhoneMap = { kakkiyah: "0500959394", subhani: "0508379339", waliy: "0550061771" };
-      var branchName = branchMap[order.branch] || order.branch || "Broast Albahr";
+      var branchName = branchMap[order.branch] || order.branch || "";
 
-      // Loyalty points calc
-      var total = order.total || 0;
-      var pts = total >= 500 ? 35 : total >= 250 ? 20 : total >= 100 ? 10 : 5;
+      var total = Number(order.total) || 0;
+      var pts;
+      if (C.loyaltyPerRule && typeof C.loyaltyPerRule === "object") {
+        // { over500:35, over250:20, over100:10, base:5 } etc.
+        pts = total >= 500 ? (C.loyaltyPerRule.over500 || 35)
+            : total >= 250 ? (C.loyaltyPerRule.over250 || 20)
+            : total >= 100 ? (C.loyaltyPerRule.over100 || 10)
+            : (C.loyaltyPerRule.base || 5);
+      } else {
+        pts = total >= 500 ? 35 : total >= 250 ? 20 : total >= 100 ? 10 : 5;
+      }
 
       var lines = [];
 
       // Header
-      lines.push(CENTER + BIG + BOLD_ON + "BROAST ALBAHR" + NORMAL + BOLD_OFF + LF);
-      lines.push(CENTER + branchName + " Branch" + LF);
+      lines.push(CENTER + BIG + BOLD_ON + (C.header || "").toUpperCase() + NORMAL + BOLD_OFF + LF);
+      if (C.tagline) lines.push(CENTER + C.tagline + LF);
+      if (C.showBranchName && branchName) lines.push(CENTER + branchName + (C.branchSuffix || "") + LF);
       lines.push(LEFT + line("="));
 
       // Order details
-      lines.push(BOLD_ON + "Order:" + BOLD_OFF + "  #" + order.orderNo + LF);
-      lines.push(BOLD_ON + "Type:" + BOLD_OFF + "   " + (order.orderType === "pickup" ? "Pickup" : "Delivery") + LF);
-      lines.push(BOLD_ON + "Date:" + BOLD_OFF + "   " + dateStr + " " + timeStr + LF);
+      if (C.showOrderNo) lines.push(BOLD_ON + "Order:" + BOLD_OFF + "  #" + order.orderNo + LF);
+      if (C.showType) lines.push(BOLD_ON + "Type:" + BOLD_OFF + "   " + (order.orderType === "pickup" ? "Pickup" : "Delivery") + LF);
+      if (C.showDate) lines.push(BOLD_ON + "Date:" + BOLD_OFF + "   " + dateStr + " " + timeStr + LF);
       lines.push(LEFT + line("-"));
 
-      // Customer details
-      lines.push(BOLD_ON + "Customer" + BOLD_OFF + LF);
-      lines.push(BOLD_ON + "Name:" + BOLD_OFF + "   " + (order.userName || "Customer") + LF);
-      if (order.userPhone) {
-        lines.push(BOLD_ON + "Phone:" + BOLD_OFF + "  " + order.userPhone + LF);
+      // Customer
+      if (C.showCustomer) {
+        lines.push(BOLD_ON + "Customer" + BOLD_OFF + LF);
+        lines.push(BOLD_ON + "Name:" + BOLD_OFF + "   " + (order.userName || "Customer") + LF);
+        if (C.showPhone && order.userPhone) lines.push(BOLD_ON + "Phone:" + BOLD_OFF + "  " + order.userPhone + LF);
+        if (C.showPayment) lines.push(BOLD_ON + "Pay:" + BOLD_OFF + "    " + (order.paymentMethod || "cash") + LF);
+        if (C.showLocation && order.orderType === "delivery" && order.locationLink) {
+          lines.push(BOLD_ON + "Location:" + BOLD_OFF + LF);
+          lines.push(order.locationLink.substring(0, W) + LF);
+        }
+        lines.push(LEFT + line("-"));
       }
-      lines.push(BOLD_ON + "Pay:" + BOLD_OFF + "    " + (order.paymentMethod || "cash") + LF);
-      if (order.orderType === "delivery" && order.locationLink) {
-        lines.push(BOLD_ON + "Location:" + BOLD_OFF + LF);
-        lines.push(order.locationLink.substring(0, 30) + LF);
-      }
-      lines.push(LEFT + line("-"));
 
       // Items
-      lines.push(CENTER + BOLD_ON + "ITEMS" + BOLD_OFF + LF);
-      lines.push(line("-"));
-      (order.items || []).forEach(function (item) {
-        var nameEn = (item.emoji || "") + " " + (item.name || "");
-        var price = "SR " + (item.price * item.qty).toFixed(2);
-        var qtyLabel = "x" + item.qty;
-        lines.push(pad(nameEn.substring(0, 22), price) + LF);
-        lines.push("  " + qtyLabel + LF);
-      });
-      lines.push(line("-"));
-      lines.push(BOLD_ON + pad("TOTAL", "SR " + total.toFixed(2)) + BOLD_OFF + LF);
-      lines.push(line("="));
+      if (C.showItems) {
+        lines.push(CENTER + BOLD_ON + "ITEMS" + BOLD_OFF + LF);
+        lines.push(line("-"));
+        (order.items || []).forEach(function (item) {
+          var name = (item.emoji || "") + " " + (item.name || "");
+          var price = "SR " + ((item.price || 0) * (item.qty || 1)).toFixed(2);
+          lines.push(pad(name.substring(0, W - price.length - 1), price) + LF);
+          if (C.showItemArabic && item.nameAr) lines.push("  " + item.nameAr + LF);
+          lines.push("  x" + (item.qty || 1) + LF);
+        });
+        lines.push(line("-"));
+        if (C.showSubtotalBreakdown) {
+          if (order.subtotal !== undefined) lines.push(pad("Subtotal", "SR " + Number(order.subtotal).toFixed(2)) + LF);
+          if (order.platformFee) lines.push(pad("Platform Fee", "SR " + Number(order.platformFee).toFixed(2)) + LF);
+          if (order.deliveryFee) lines.push(pad("Delivery Fee", "SR " + Number(order.deliveryFee).toFixed(2)) + LF);
+          if (order.vat) lines.push(pad("VAT 15%", "SR " + Number(order.vat).toFixed(2)) + LF);
+        }
+        lines.push(BOLD_ON + pad("TOTAL", "SR " + total.toFixed(2)) + BOLD_OFF + LF);
+        lines.push(line("="));
+      }
 
-      // Loyalty points
-      lines.push(CENTER + BOLD_ON + "Loyalty Points" + BOLD_OFF + LF);
-      lines.push(CENTER + "Earned this order: +" + pts + " pts" + LF);
-      lines.push(LEFT + line("-"));
+      // Loyalty
+      if (C.showLoyalty) {
+        lines.push(CENTER + BOLD_ON + (C.loyaltyLabel || "Loyalty Points") + BOLD_OFF + LF);
+        lines.push(CENTER + "Earned this order: +" + pts + " pts" + LF);
+        lines.push(LEFT + line("-"));
+      }
 
-      // Branch phones
-      lines.push(CENTER + BOLD_ON + "Contact Us" + BOLD_OFF + LF);
-      lines.push(CENTER + "Kakkiyah:     0500959394" + LF);
-      lines.push(CENTER + "Subhani:      0508379339" + LF);
-      lines.push(CENTER + "Waliy Al Ahd: 0550061771" + LF);
-      lines.push(LEFT + line("="));
+      // Tax IDs
+      if (C.showTaxNumber && C.taxNumber) lines.push(BOLD_ON + "Tax#:" + BOLD_OFF + " " + C.taxNumber + LF);
+      if (C.showVatNumber && C.vatNumber) lines.push(BOLD_ON + "VAT#:" + BOLD_OFF + " " + C.vatNumber + LF);
+      if ((C.showTaxNumber && C.taxNumber) || (C.showVatNumber && C.vatNumber)) lines.push(LEFT + line("-"));
+
+      // Contact block
+      if (C.showBranchPhones) {
+        lines.push(CENTER + BOLD_ON + (C.contactHeader || "Contact Us") + BOLD_OFF + LF);
+        (C.contactLines || []).forEach(function (l) { if (l) lines.push(CENTER + l + LF); });
+        lines.push(LEFT + line("="));
+      }
+
+      // Promo
+      if (C.promoLine) { lines.push(CENTER + C.promoLine + LF); lines.push(LEFT + line("-")); }
 
       // Footer
-      lines.push(CENTER + BOLD_ON + "Thank you for your order!" + BOLD_OFF + LF);
-      lines.push(CENTER + "TikTok: @brustalbahr" + LF);
-      lines.push(CENTER + "Follow us for offers!" + LF);
-      lines.push(LF + LF + LF);
-      lines.push(CUT);
+      if (C.footerLine1) lines.push(CENTER + BOLD_ON + C.footerLine1 + BOLD_OFF + LF);
+      if (C.footerLine2) lines.push(CENTER + C.footerLine2 + LF);
+      if (C.footerLine3) lines.push(CENTER + C.footerLine3 + LF);
+
+      var feed = Math.max(1, Number(C.feedLines) || 3);
+      lines.push(LF.repeat(feed));
+      if (C.autoCut !== false) lines.push(CUT);
 
       return lines.join("");
+    }
+
+    // ── Browser fallback (Windows manual driver) ────────────
+    // Same data as thermal path, laid out at ~80mm width. The Windows
+    // thermal-printer driver handles the paper cut once "auto-cut after job"
+    // is on in its Preferences pane (standard EPSON/Xprinter/Bixolon default).
+    function buildReceiptHTML(order) {
+      var C = resolveConfig(order.branch);
+      var branchMap = { kakkiyah: "Kakkiyah", subhani: "Subhani", waliy: "Waliy Al Ahd" };
+      var branchName = branchMap[order.branch] || order.branch || "";
+      var d = new Date();
+      var when = d.toLocaleDateString("en-GB") + " " + d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      var total = Number(order.total) || 0;
+      var pts = total >= 500 ? 35 : total >= 250 ? 20 : total >= 100 ? 10 : 5;
+      function esc(s){ return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+      var itemRows = (order.items || []).map(function(it){
+        var line = (it.emoji || "") + " " + (it.name || "") + (C.showItemArabic && it.nameAr ? " / " + it.nameAr : "");
+        var right = "SR " + ((it.price || 0) * (it.qty || 1)).toFixed(2);
+        return "<tr><td class='n'>" + esc(line) + "<div class='q'>x" + (it.qty || 1) + "</div></td><td class='p'>" + esc(right) + "</td></tr>";
+      }).join("");
+
+      var contactHTML = (C.showBranchPhones ? (C.contactLines || []).filter(Boolean).map(function(l){ return "<div>" + esc(l) + "</div>"; }).join("") : "");
+      // 80mm receipt = 72mm printable. Page-break-after ensures the driver
+      // treats each ticket as its own job, which triggers auto-cut.
+      return "<!doctype html><html><head><meta charset='utf-8'/><title>Receipt #" + esc(order.orderNo) + "</title>" +
+        "<style>" +
+        "@page{size:72mm auto;margin:0}" +
+        "html,body{margin:0;padding:0;background:#fff;color:#000;font-family:'Courier New',monospace;font-size:12px;line-height:1.35;width:72mm}" +
+        ".r{padding:6mm 4mm}" +
+        ".c{text-align:center}.b{font-weight:900}.big{font-size:16px}.sm{font-size:10.5px}" +
+        "hr{border:none;border-top:1px dashed #000;margin:5px 0}.dbl{border-top:2px solid #000}" +
+        "table{width:100%;border-collapse:collapse}td{vertical-align:top;padding:2px 0}" +
+        ".n{width:70%}.p{width:30%;text-align:right;white-space:nowrap}.q{color:#333;font-size:10.5px;margin-top:1px}" +
+        ".row{display:flex;justify-content:space-between}" +
+        ".pagecut{page-break-after:always}" +
+        "</style></head><body><div class='r'>" +
+          "<div class='c b big'>" + esc((C.header || "").toUpperCase()) + "</div>" +
+          (C.tagline ? "<div class='c sm'>" + esc(C.tagline) + "</div>" : "") +
+          (C.showBranchName && branchName ? "<div class='c'>" + esc(branchName + (C.branchSuffix || "")) + "</div>" : "") +
+          "<hr class='dbl'/>" +
+          (C.showOrderNo ? "<div class='row'><span class='b'>Order</span><span>#" + esc(order.orderNo) + "</span></div>" : "") +
+          (C.showType ? "<div class='row'><span class='b'>Type</span><span>" + esc(order.orderType === "pickup" ? "Pickup" : "Delivery") + "</span></div>" : "") +
+          (C.showDate ? "<div class='row'><span class='b'>Date</span><span>" + esc(when) + "</span></div>" : "") +
+          "<hr/>" +
+          (C.showCustomer ? "<div class='b'>Customer</div>" +
+            "<div class='row'><span>Name</span><span>" + esc(order.userName || "Customer") + "</span></div>" +
+            (C.showPhone && order.userPhone ? "<div class='row'><span>Phone</span><span>" + esc(order.userPhone) + "</span></div>" : "") +
+            (C.showPayment ? "<div class='row'><span>Pay</span><span>" + esc(order.paymentMethod || "cash") + "</span></div>" : "") +
+            (C.showLocation && order.orderType === "delivery" && order.locationLink ? "<div class='sm'>" + esc(order.locationLink) + "</div>" : "") +
+            "<hr/>" : "") +
+          (C.showItems ? "<div class='c b'>ITEMS</div><hr/><table>" + itemRows + "</table><hr/>" +
+            (C.showSubtotalBreakdown && order.subtotal !== undefined ? "<div class='row'><span>Subtotal</span><span>SR " + Number(order.subtotal).toFixed(2) + "</span></div>" : "") +
+            (C.showSubtotalBreakdown && order.platformFee ? "<div class='row'><span>Platform Fee</span><span>SR " + Number(order.platformFee).toFixed(2) + "</span></div>" : "") +
+            (C.showSubtotalBreakdown && order.deliveryFee ? "<div class='row'><span>Delivery Fee</span><span>SR " + Number(order.deliveryFee).toFixed(2) + "</span></div>" : "") +
+            (C.showSubtotalBreakdown && order.vat ? "<div class='row'><span>VAT 15%</span><span>SR " + Number(order.vat).toFixed(2) + "</span></div>" : "") +
+            "<div class='row b big'><span>TOTAL</span><span>SR " + total.toFixed(2) + "</span></div><hr class='dbl'/>" : "") +
+          (C.showLoyalty ? "<div class='c b'>" + esc(C.loyaltyLabel || "Loyalty Points") + "</div><div class='c'>Earned this order: +" + pts + " pts</div><hr/>" : "") +
+          ((C.showTaxNumber && C.taxNumber) ? "<div class='row'><span class='b'>Tax#</span><span>" + esc(C.taxNumber) + "</span></div>" : "") +
+          ((C.showVatNumber && C.vatNumber) ? "<div class='row'><span class='b'>VAT#</span><span>" + esc(C.vatNumber) + "</span></div>" : "") +
+          (contactHTML ? "<div class='c b' style='margin-top:6px'>" + esc(C.contactHeader || "Contact Us") + "</div><div class='c sm'>" + contactHTML + "</div><hr class='dbl'/>" : "") +
+          (C.promoLine ? "<div class='c sm'>" + esc(C.promoLine) + "</div><hr/>" : "") +
+          (C.footerLine1 ? "<div class='c b'>" + esc(C.footerLine1) + "</div>" : "") +
+          (C.footerLine2 ? "<div class='c sm'>" + esc(C.footerLine2) + "</div>" : "") +
+          (C.footerLine3 ? "<div class='c sm'>" + esc(C.footerLine3) + "</div>" : "") +
+          "<div style='height:" + (Math.max(1, Number(C.feedLines) || 3) * 4) + "mm'></div>" +
+        "</div><div class='pagecut'></div></body></html>";
+    }
+
+    // Print the HTML receipt through the browser's native print pipeline.
+    // Works on any Windows machine that has the thermal printer installed as
+    // a normal Windows printer — no QZ Tray required.
+    function browserPrint(order) {
+      return new Promise(function (resolve) {
+        var f = document.createElement("iframe");
+        f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+        document.body.appendChild(f);
+        var html = buildReceiptHTML(order);
+        try {
+          f.contentDocument.open();
+          f.contentDocument.write(html);
+          f.contentDocument.close();
+        } catch (e) { resolve(false); return; }
+        setTimeout(function () {
+          try {
+            f.contentWindow.focus();
+            f.contentWindow.print();
+          } catch (e) {}
+          setTimeout(function () { try { f.remove(); } catch (_) {} resolve(true); }, 1500);
+        }, 400);
+      });
     }
 
     // ── Send to printer ─────────────────────────────────────
@@ -2694,6 +3117,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         return qz.print(config, data);
       });
     }
+    // Try QZ Tray silent raw printing first. Fall back to the browser's
+    // built-in print pipeline (Windows manual printing) if QZ Tray isn't
+    // running — same data, driver-side auto-cut.
     function printOrder(order) {
       return connect().then(function () {
         return _doPrint(order);
@@ -2702,9 +3128,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         showStatus("✅ Printed #" + order.orderNo, "ok");
         PRINTED_IDS.add(_dedupKey(order));
       }).catch(function (err) {
-        console.warn("Print attempt 1 failed:", err && err.message || err);
-        // One retry after a short back-off, in case the WS reconnects mid-flight.
-        return new Promise(function (r) { setTimeout(r, 1500); })
+        console.warn("QZ print attempt 1 failed:", err && err.message || err);
+        return new Promise(function (r) { setTimeout(r, 1200); })
           .then(function () { return connect(); })
           .then(function () { return _doPrint(order); })
           .then(function () {
@@ -2713,8 +3138,12 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
             PRINTED_IDS.add(_dedupKey(order));
           })
           .catch(function (err2) {
-            console.error("Print failed after retry:", err2);
-            showStatus("❌ Print failed #" + order.orderNo, "error");
+            console.warn("QZ retry failed, falling back to Windows browser print:", err2 && err2.message || err2);
+            showStatus("🖨️ Using Windows printer #" + order.orderNo, "warn");
+            return browserPrint(order).then(function () {
+              PRINTED_IDS.add(_dedupKey(order));
+              showStatus("✅ Printed via Windows #" + order.orderNo, "ok");
+            });
           });
       });
     }
@@ -2983,7 +3412,13 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       getConfig: function () { return { printerName: PRINTER_NAME, copies: COPIES, autoPrint: AUTO_PRINT, printerMap: Object.assign({}, PRINTER_MAP) }; },
       // Pre-claim a dedup key so the Firestore listener's auto-print hook
       // won't race with an explicit Accept-triggered print.
-      markPrinted: function (order) { if (order) PRINTED_IDS.add(_dedupKey(order)); }
+      markPrinted: function (order) { if (order) PRINTED_IDS.add(_dedupKey(order)); },
+      // Invoice template overrides. Called by the app after loading Firestore
+      // config, and every time it changes via onSnapshot.
+      setInvoiceConfig: function (cfg) { setInvoiceConfig(cfg); },
+      getInvoiceDefaults: function () { return Object.assign({}, INVOICE_DEFAULTS); },
+      // Manual browser-only print — for testing the Windows fallback path.
+      browserPrint: function (order) { return browserPrint(order); }
     };
   })();
   </script>
