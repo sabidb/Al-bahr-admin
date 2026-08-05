@@ -1267,23 +1267,59 @@ function CustomersTabNew({ customers }) {
   const [historyCustomer, setHistoryCustomer] = React.useState(null);
   const [customerOrders, setCustomerOrders] = React.useState([]);
   const [loadingHistory, setLoadingHistory] = React.useState(false);
+  const [lookupBusy, setLookupBusy] = React.useState(false);
+  const [lookupError, setLookupError] = React.useState("");
+  const [highlightOrderNo, setHighlightOrderNo] = React.useState("");
+
+  // Heuristics for the smart search box.
+  const raw = search.trim();
+  const looksLikeOrderNo = /^\d{5,}$/.test(raw) && !raw.startsWith("0");
+  const looksLikePhone = /^0\d{6,9}$/.test(raw); // partial or full Saudi phone
 
   const filtered = search
     ? customers.filter(c =>
-        (c.phone && c.phone.includes(search)) ||
-        (c.name && c.name.toLowerCase().includes(search.toLowerCase()))
+        (c.phone && c.phone.includes(raw)) ||
+        (c.name && c.name.toLowerCase().includes(raw.toLowerCase()))
       )
     : customers;
 
-  const openHistory = async (customer) => {
+  const openHistory = async (customer, opts) => {
     setHistoryCustomer(customer);
     setLoadingHistory(true);
     setCustomerOrders([]);
+    setHighlightOrderNo(opts && opts.highlight ? String(opts.highlight) : "");
     if (window.FB && window.FB.getCustomerOrders) {
       const orders = await window.FB.getCustomerOrders(customer.phone);
       setCustomerOrders(orders);
     }
     setLoadingHistory(false);
+  };
+
+  // Search-by-order-number: look up the order, then jump to its customer.
+  const lookupByOrderNo = async () => {
+    if (!window.FB || !window.FB.getOrderByNo) return;
+    setLookupBusy(true); setLookupError("");
+    try {
+      const order = await window.FB.getOrderByNo(raw);
+      if (!order || !order.userPhone) { setLookupError("Order #" + raw + " not found."); return; }
+      const known = customers.find(c => c.phone === order.userPhone);
+      let cust = known;
+      if (!cust && window.FB.getCustomerByPhone) cust = await window.FB.getCustomerByPhone(order.userPhone);
+      if (!cust) cust = { phone: order.userPhone, name: order.userName || "Customer" };
+      openHistory(cust, { highlight: order.orderNo });
+    } finally { setLookupBusy(false); }
+  };
+
+  // Full-phone deep lookup for phones not yet in the local customers cache
+  // (e.g., first order at another branch that hasn't hit onSnapshot yet).
+  const lookupByPhone = async () => {
+    if (!window.FB || !window.FB.getCustomerByPhone) return;
+    setLookupBusy(true); setLookupError("");
+    try {
+      const cust = await window.FB.getCustomerByPhone(raw);
+      if (!cust) { setLookupError("No customer with phone " + raw + " yet."); return; }
+      openHistory(cust);
+    } finally { setLookupBusy(false); }
   };
 
   // Customer history view
@@ -1315,12 +1351,14 @@ function CustomersTabNew({ customers }) {
       const date = o.createdAt && o.createdAt.toDate ? o.createdAt.toDate() : (o.date ? new Date(o.date) : null);
       const dateStr = date ? date.toLocaleDateString("en-GB") + " · " + date.toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" }) : "";
       const scMap = { new: "#F97316", preparing: "#D97706", ready: "#059669", done: "#2563EB" };
-      return React.createElement("div", { key: i, className: "card", style: { padding: "14px 16px", marginBottom: 8 } },
+      const isHit = highlightOrderNo && String(o.orderNo) === String(highlightOrderNo);
+      return React.createElement("div", { key: i, className: "card", style: { padding: "14px 16px", marginBottom: 8, border: isHit ? "2px solid #F97316" : undefined, boxShadow: isHit ? "0 6px 24px rgba(249,115,22,0.18)" : undefined } },
         React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start" } },
           React.createElement("div", null,
             React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 4 } },
               React.createElement("span", { className: "mono", style: { fontWeight: 700, color: "#1A1D27", fontSize: 13 } }, "#" + (o.orderNo || o.fbId?.slice(-4) || "—")),
-              React.createElement("span", { style: { fontSize: 10, background: (scMap[o.status]||"#6B7280")+"20", color: scMap[o.status]||"#6B7280", padding: "2px 8px", borderRadius: 20, fontWeight: 700 } }, o.status||"—")
+              React.createElement("span", { style: { fontSize: 10, background: (scMap[o.status]||"#6B7280")+"20", color: scMap[o.status]||"#6B7280", padding: "2px 8px", borderRadius: 20, fontWeight: 700 } }, o.status||"—"),
+              isHit && React.createElement("span", { style: { fontSize: 10, background: "#FFF7ED", color: "#EA580C", padding: "2px 8px", borderRadius: 20, fontWeight: 800, border: "1px solid #FED7AA" } }, "🎯 MATCH")
             ),
             React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF" } }, dateStr),
             React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 4 } }, (o.items||[]).map(it=>(it.qty||1)+"× "+it.name).join(", "))
@@ -1332,7 +1370,26 @@ function CustomersTabNew({ customers }) {
   );
 
   return React.createElement("div", null,
-    React.createElement("input", { value: search, onChange: e => setSearch(e.target.value), placeholder: "🔍 Search by name or phone number...", className: "inp", style: { marginBottom: 14, padding: "14px 16px", fontSize: 14 } }),
+    React.createElement("input", {
+      value: search,
+      onChange: e => { setSearch(e.target.value); setLookupError(""); },
+      onKeyDown: e => { if (e.key === "Enter") { if (looksLikeOrderNo) lookupByOrderNo(); else if (looksLikePhone && filtered.length === 0) lookupByPhone(); } },
+      placeholder: "🔍 Name · phone · or order # (e.g. 100042)",
+      className: "inp",
+      style: { marginBottom: 10, padding: "14px 16px", fontSize: 14 }
+    }),
+
+    // Deep-lookup hints — visible only when the query looks like an order # or a full phone
+    (looksLikeOrderNo || (looksLikePhone && filtered.length === 0)) && React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" } },
+      looksLikeOrderNo && React.createElement("button", { onClick: lookupByOrderNo, disabled: lookupBusy,
+        style: { background: "#FFF7ED", border: "1px solid #FED7AA", color: "#EA580C", padding: "9px 14px", borderRadius: 12, fontSize: 12, fontWeight: 700, cursor: "pointer" } },
+        lookupBusy ? "Looking up…" : ("🔎 Pull customer for order #" + raw)),
+      looksLikePhone && filtered.length === 0 && React.createElement("button", { onClick: lookupByPhone, disabled: lookupBusy,
+        style: { background: "#EFF6FF", border: "1px solid #BFDBFE", color: "#2563EB", padding: "9px 14px", borderRadius: 12, fontSize: 12, fontWeight: 700, cursor: "pointer" } },
+        lookupBusy ? "Looking up…" : ("🔎 Fetch " + raw + " directly"))
+    ),
+    lookupError && React.createElement("div", { style: { background: "#FEF2F2", border: "1px solid #FECACA", color: "#DC2626", padding: "10px 14px", borderRadius: 12, marginBottom: 12, fontWeight: 600, fontSize: 12.5 } }, "❌ " + lookupError),
+
     React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 } },
       React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27" } }, "👥 Customers"),
       React.createElement("span", { className: "tag tag-red" }, filtered.length + " found")
@@ -1340,7 +1397,12 @@ function CustomersTabNew({ customers }) {
     filtered.length === 0
       ? React.createElement("div", { className: "card", style: { padding: 50, textAlign: "center" } },
           React.createElement("div", { style: { fontSize: 44, marginBottom: 12 } }, search ? "🔍" : "👥"),
-          React.createElement("div", { style: { color: "#6B7280", fontSize: 14 } }, search ? "No customers match" : "No customers yet")
+          React.createElement("div", { style: { color: "#6B7280", fontSize: 14 } },
+            search
+              ? (looksLikeOrderNo ? "No customer name matches — click the order-# lookup above."
+                : looksLikePhone ? "No customer name matches — click the phone lookup above."
+                : "No customers match")
+              : "No customers yet")
         )
       : filtered.map(c =>
           React.createElement("div", { key: c.id || c.phone, className: "card", style: { padding: "14px 16px", marginBottom: 10, display: "flex", alignItems: "center", gap: 12 } },
@@ -2753,6 +2815,28 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         saveAccounts: async function(a){ try{ await setDoc(doc(_db,"settings","accounts"),Object.assign({},a,{updatedAt:serverTimestamp()}),{merge:true}); return true; }catch(e){ window.__fbErr("accounts",e); return false; } },
         onAccountsChange: function(cb){ return onSnapshot(doc(_db,"settings","accounts"),function(s){ if(s.exists())cb(s.data()); }); },
         getCustomerOrders: async function(ph){ try{ var snap=await getDocs(collection(_db,"orders")); return snap.docs.map(function(d){ return Object.assign({fbId:d.id},d.data()); }).filter(function(o){ return o.userPhone===ph; }).sort(function(a,b){ return ((b.createdAt&&b.createdAt.seconds)||0)-((a.createdAt&&a.createdAt.seconds)||0); }); }catch(e){ return []; } },
+        // Customer directory is a single Firestore collection — every branch
+        // manager reads it, so a phone number entered at any branch is
+        // discoverable at every other branch.
+        getCustomerByPhone: async function(ph){ try{
+          if(!ph) return null;
+          var s = await getDoc(doc(_db,"customers",ph));
+          return s.exists() ? Object.assign({ phone: ph }, s.data()) : null;
+        }catch(e){ return null; } },
+        // Look up an order by its 6-digit orderNo (100000+). Falls back to a
+        // full scan if the indexed query fails — small collection, cheap.
+        getOrderByNo: async function(no){ try{
+          if(!no) return null;
+          try {
+            var q = query(collection(_db,"orders"), where("orderNo","==", String(no)));
+            var snap = await getDocs(q);
+            if (!snap.empty) { var d = snap.docs[0]; return Object.assign({ fbId: d.id }, d.data()); }
+          } catch(_) {}
+          var full = await getDocs(collection(_db,"orders"));
+          var hit = full.docs.map(function(d){ return Object.assign({ fbId: d.id }, d.data()); })
+                             .find(function(o){ return String(o.orderNo) === String(no); });
+          return hit || null;
+        }catch(e){ return null; } },
         onMenuChange: function(cb){ return onSnapshot(doc(_db,"settings","menu"),function(s){ if(s.exists())cb(s.data().menu); }); },
         onSettingsChange: function(cb){ return onSnapshot(doc(_db,"settings","restaurant"),function(s){ if(s.exists())cb(s.data()); }); },
         onOrdersChange: function(cb){ return onSnapshot(collection(_db,"orders"),function(s){ var o=s.docs.map(function(d){ return Object.assign({fbId:d.id},d.data()); }); o.sort(function(a,b){ return ((b.createdAt&&b.createdAt.seconds)||0)-((a.createdAt&&a.createdAt.seconds)||0); }); cb(o); }); },
