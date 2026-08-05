@@ -117,13 +117,14 @@ function StatCard({ icon, label, value, color, sublabel, trend }) {
 }
 
 // ── ORDER CARD ──
-function OrderCard({ order, onStatusChange, isNew }) {
+function OrderCard({ order, onStatusChange, onAccept, onDecline, isNew }) {
   const [expanded, setExpanded] = React.useState(isNew || false);
   const statusCfg = {
     new:       { bg: "#FFF7ED", border: "#FED7AA", dot: "#F97316", label: "New",       tag: "tag-orange" },
     preparing: { bg: "#FFFBEB", border: "#FDE68A", dot: "#D97706", label: "Preparing", tag: "tag-yellow" },
     ready:     { bg: "#F0FDF4", border: "#BBF7D0", dot: "#059669", label: "Ready",     tag: "tag-green"  },
     done:      { bg: "#EFF6FF", border: "#BFDBFE", dot: "#2563EB", label: "Done",      tag: "tag-blue"   },
+    cancelled: { bg: "#FEF2F2", border: "#FECACA", dot: "#DC2626", label: "Declined",  tag: "tag-red"    },
   };
   const cfg = statusCfg[order.status] || statusCfg.new;
   const timeAgo = (() => {
@@ -176,12 +177,18 @@ function OrderCard({ order, onStatusChange, isNew }) {
         order.locationLink && React.createElement("a", { href: order.locationLink, target: "_blank", className: "tag tag-green", style: { textDecoration: "none" } }, "📍 Map")
       ),
       // Actions
-      React.createElement("div", { style: { display: "flex", gap: 8 } },
-        order.status === "new" && React.createElement("button", {
-          onClick: () => onStatusChange(order.orderNo, "preparing"),
-          className: "btn-primary",
-          style: { flex: 1, padding: "11px", fontSize: 13 }
-        }, "👨‍🍳 Start Preparing"),
+      React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+        order.status === "new" && React.createElement(React.Fragment, null,
+          React.createElement("button", {
+            onClick: () => onAccept ? onAccept(order) : onStatusChange(order.orderNo, "preparing"),
+            className: "btn-green",
+            style: { flex: 2, padding: "12px", fontSize: 13, fontWeight: 800 }
+          }, "✅ Accept & Print"),
+          React.createElement("button", {
+            onClick: () => onDecline ? onDecline(order) : onStatusChange(order.orderNo, "cancelled"),
+            style: { flex: 1, padding: "12px", fontSize: 13, background: "#FFF1F2", border: "1px solid #FECACA", color: "#DC2626", borderRadius: 12, cursor: "pointer", fontWeight: 700 }
+          }, "❌ Decline")
+        ),
         order.status === "preparing" && React.createElement("button", {
           onClick: () => onStatusChange(order.orderNo, "ready"),
           className: "btn-green",
@@ -214,53 +221,125 @@ function OrderCard({ order, onStatusChange, isNew }) {
 }
 
 // ── MENU TAB ──
-function MenuTabNew({ menu, setMenu }) {
+// Per-branch model. Each item carries:
+//   branches: ["all"] | [branchId,...]        which branches carry it
+//   availability: { [branchId]: boolean }     per-branch on/off toggle
+// Legacy items (no branches / no availability) default to all branches
+// and fall back to the top-level `available` bool.
+function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
+  const BRANCH_LIST = branches || [];
+  // Owner can pick any branch view or "all"; manager is locked to their branch.
+  const initialView = isOwner ? "all" : (branchScope || (BRANCH_LIST[0] && BRANCH_LIST[0].id) || "all");
+  const [branchView, setBranchView] = React.useState(initialView);
   const [search, setSearch] = React.useState("");
   const [editingId, setEditingId] = React.useState(null);
-  const [editData, setEditData] = React.useState({ price: "", name: "", nameAr: "", emoji: "" });
+  const [editData, setEditData] = React.useState({ price: "", name: "", nameAr: "", emoji: "", branches: ["all"] });
   const [saved, setSaved] = React.useState(false);
   const [adding, setAdding] = React.useState(false);
-  const [newItem, setNewItem] = React.useState({ name: "", nameAr: "", price: "", emoji: "🍗", category: "🍗 Broast", cal: "" });
+  const [newItem, setNewItem] = React.useState({
+    name: "", nameAr: "", price: "", emoji: "🍗", category: "🍗 Broast", cal: "",
+    branches: isOwner ? ["all"] : [branchScope],
+  });
 
   const categories = Object.keys(menu).length > 0 ? Object.keys(menu) : ["🍗 Broast","🦐 Seafood","🍔 Burgers","🥪 Clubs","🌯 Sandwiches","🍟 Sides","🥤 Drinks"];
 
-  const allItems = Object.values(menu).flat();
-  const filtered = search ? allItems.filter(i => i.name.toLowerCase().includes(search.toLowerCase()) || (i.nameAr && i.nameAr.includes(search))) : null;
-  const displayMenu = filtered ? { "🔍 Results": filtered } : menu;
+  // Helpers — treat legacy items as belonging to all branches.
+  const itemBranches = (i) => (Array.isArray(i.branches) && i.branches.length ? i.branches : ["all"]);
+  const itemAppliesTo = (i, branchId) => {
+    const bs = itemBranches(i);
+    return bs.indexOf("all") >= 0 || bs.indexOf(branchId) >= 0;
+  };
+  const itemAvailableAt = (i, branchId) => {
+    if (i.availability && Object.prototype.hasOwnProperty.call(i.availability, branchId)) return !!i.availability[branchId];
+    return i.available !== false;
+  };
+  const itemShownInView = (i) => branchView === "all" ? true : itemAppliesTo(i, branchView);
+  const branchName = (id) => id === "all" ? "All branches" : ((BRANCH_LIST.find(b => b.id === id) || {}).name || id);
+  const branchesForNewItem = () => isOwner ? newItem.branches : [branchScope];
 
+  // The set of items the current view can see
+  const allItems = Object.values(menu).flat();
+  const searchFiltered = search
+    ? allItems.filter(i => (i.name || "").toLowerCase().includes(search.toLowerCase()) || (i.nameAr && i.nameAr.includes(search)))
+    : null;
+  const visible = (searchFiltered || allItems).filter(itemShownInView);
+  const displayMenu = search
+    ? { "🔍 Results": visible }
+    : Object.fromEntries(Object.entries(menu).map(([cat, items]) => [cat, items.filter(itemShownInView)]).filter(([, items]) => items.length > 0));
+
+  // ── Mutations ─────────────────────────────────────────
+  const persist = (u) => { setMenu(u); if (window.FB) window.FB.saveMenu(u); };
+
+  // Toggle on/off — manager only for their branch, owner for the current view
+  // ("all" = flips every branch this item applies to).
   const toggleAvail = (id) => {
+    const target = isOwner ? branchView : branchScope;
     const u = {};
-    for (const [cat, items] of Object.entries(menu))
-      u[cat] = items.map(i => i.id === id ? { ...i, available: !i.available } : i);
-    setMenu(u);
-    if (window.FB) window.FB.saveMenu(u);
+    for (const [cat, items] of Object.entries(menu)) {
+      u[cat] = items.map(i => {
+        if (i.id !== id) return i;
+        const applicable = itemBranches(i).indexOf("all") >= 0 ? BRANCH_LIST.map(b => b.id) : itemBranches(i);
+        const nextAvail = Object.assign({}, i.availability || {});
+        // Fill in current values (fallback to legacy `available`) so a partial flip works
+        applicable.forEach(bId => {
+          if (!Object.prototype.hasOwnProperty.call(nextAvail, bId)) nextAvail[bId] = i.available !== false;
+        });
+        if (target === "all") {
+          // Flip the item globally — use whatever is currently true anywhere as the reference
+          const anyOn = applicable.some(bId => nextAvail[bId] !== false);
+          applicable.forEach(bId => { nextAvail[bId] = !anyOn; });
+        } else {
+          nextAvail[target] = !nextAvail[target];
+        }
+        // Top-level `available` = true if the item is on at ANY branch. This keeps the
+        // customer app (which browses one global menu) showing the item as long as some
+        // branch offers it; enforcement then happens at order time against the branch's
+        // specific availability map.
+        return Object.assign({}, i, { availability: nextAvail, available: applicable.some(bId => nextAvail[bId] !== false) });
+      });
+    }
+    persist(u);
   };
 
   const saveEdit = (id) => {
     const p = parseFloat(editData.price);
     if (isNaN(p) || p <= 0) return;
     const u = {};
-    for (const [cat, items] of Object.entries(menu))
-      u[cat] = items.map(i => i.id === id ? { ...i, price: p, name: editData.name || i.name, nameAr: editData.nameAr || i.nameAr, emoji: editData.emoji || i.emoji } : i);
-    setMenu(u);
+    for (const [cat, items] of Object.entries(menu)) {
+      u[cat] = items.map(i => {
+        if (i.id !== id) return i;
+        const patch = Object.assign({}, i, {
+          price: p,
+          name: editData.name || i.name,
+          nameAr: editData.nameAr || i.nameAr,
+          emoji: editData.emoji || i.emoji,
+        });
+        // Only the owner can change which branches an item belongs to.
+        if (isOwner && Array.isArray(editData.branches) && editData.branches.length) patch.branches = editData.branches;
+        return patch;
+      });
+    }
+    persist(u);
     setEditingId(null);
-    if (window.FB) window.FB.saveMenu(u);
     setSaved(true); setTimeout(() => setSaved(false), 2000);
   };
 
   const deleteItem = (id) => {
+    if (!isOwner) { alert("Only the owner can delete menu items."); return; }
     if (!window.confirm("Delete this item?")) return;
     const u = {};
-    for (const [cat, items] of Object.entries(menu))
-      u[cat] = items.filter(i => i.id !== id);
-    setMenu(u);
-    if (window.FB) window.FB.saveMenu(u);
+    for (const [cat, items] of Object.entries(menu)) u[cat] = items.filter(i => i.id !== id);
+    persist(u);
   };
 
   const addItem = () => {
     if (!newItem.name || !newItem.price || !newItem.category) return;
+    const bs = branchesForNewItem();
+    if (!bs || !bs.length) { alert("Pick at least one branch for this item."); return; }
     const allIds = Object.values(menu).flat().map(i => i.id);
     const newId = allIds.length > 0 ? Math.max(...allIds) + 1 : 1;
+    const availability = {};
+    (bs.indexOf("all") >= 0 ? BRANCH_LIST.map(b => b.id) : bs).forEach(bId => { availability[bId] = true; });
     const u = { ...menu };
     if (!u[newItem.category]) u[newItem.category] = [];
     u[newItem.category] = [...u[newItem.category], {
@@ -270,39 +349,79 @@ function MenuTabNew({ menu, setMenu }) {
       price: parseFloat(newItem.price),
       emoji: newItem.emoji || "🍗",
       cal: newItem.cal || "—",
+      branches: bs,
+      availability: availability,
       available: true,
     }];
-    setMenu(u);
-    if (window.FB) window.FB.saveMenu(u);
+    persist(u);
     setAdding(false);
-    setNewItem({ name: "", nameAr: "", price: "", emoji: "🍗", category: categories[0] || "🍗 Broast", cal: "" });
+    setNewItem({ name: "", nameAr: "", price: "", emoji: "🍗", category: categories[0] || "🍗 Broast", cal: "", branches: isOwner ? ["all"] : [branchScope] });
     setSaved(true); setTimeout(() => setSaved(false), 2000);
+  };
+
+  // ── Small pieces of UI ────────────────────────────────
+  const branchPicker = () => {
+    if (!isOwner) {
+      return React.createElement("div", { className: "card", style: { padding: "10px 14px", marginBottom: 12, background: "#FFF7ED", border: "1px solid #FED7AA", fontSize: 12, color: "#9A3412", fontWeight: 600 } },
+        "🏪 Managing menu for: ", React.createElement("b", null, branchName(branchScope || "")));
+    }
+    return React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 12, overflowX: "auto", paddingBottom: 4 } },
+      [{ id: "all", name: "All branches" }].concat(BRANCH_LIST).map(b => {
+        const active = branchView === b.id;
+        return React.createElement("button", {
+          key: b.id, onClick: () => setBranchView(b.id),
+          style: { padding: "8px 14px", borderRadius: 20, border: "1.5px solid " + (active ? "#E60000" : "#EAECF2"), background: active ? "#FFF1F2" : "#fff", color: active ? "#E60000" : "#6B7280", fontSize: 12, fontWeight: active ? 700 : 500, cursor: "pointer", whiteSpace: "nowrap" }
+        }, (b.id === "all" ? "🏬 " : "🏪 ") + b.name);
+      })
+    );
+  };
+
+  const branchesChecklist = (selected, setSelected) => {
+    if (!isOwner) return null;
+    const allSel = selected && selected.indexOf("all") >= 0;
+    return React.createElement("div", { style: { gridColumn: "span 2" } },
+      React.createElement("div", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700, marginBottom: 6 } }, "AVAILABLE AT"),
+      React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 } },
+        [{ id: "all", name: "All branches" }].concat(BRANCH_LIST).map(b => {
+          const on = b.id === "all" ? allSel : (allSel || (selected && selected.indexOf(b.id) >= 0));
+          return React.createElement("label", { key: b.id, style: { display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "1px solid " + (on ? "#059669" : "#EAECF2"), background: on ? "#ECFDF5" : "#fff", borderRadius: 20, cursor: b.id === "all" || !allSel ? "pointer" : "not-allowed", opacity: b.id === "all" || !allSel ? 1 : 0.5, fontSize: 12, fontWeight: 600, color: on ? "#059669" : "#6B7280" } },
+            React.createElement("input", { type: "checkbox", checked: on, disabled: b.id !== "all" && allSel, onChange: () => {
+              if (b.id === "all") { setSelected(on ? [] : ["all"]); return; }
+              const cur = (selected || []).filter(x => x !== "all");
+              const idx = cur.indexOf(b.id);
+              if (idx >= 0) cur.splice(idx, 1); else cur.push(b.id);
+              setSelected(cur.length ? cur : ["all"]);
+            }, style: { accentColor: "#059669" } }),
+            b.id === "all" ? "🏬 All" : ("🏪 " + b.name));
+        })
+      )
+    );
   };
 
   return React.createElement("div", null,
     saved && React.createElement("div", { style: { background: "#ECFDF5", border: "1px solid #BBF7D0", color: "#059669", padding: "12px 16px", borderRadius: 14, marginBottom: 14, fontWeight: 600, fontSize: 13 } }, "✅ Menu saved!"),
 
-    // Search
+    branchPicker(),
+
     React.createElement("input", { value: search, onChange: e => setSearch(e.target.value), placeholder: "🔍 Search menu items...", className: "inp", style: { marginBottom: 12, padding: "14px 16px", fontSize: 14 } }),
 
-    // Action buttons
     React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 16 } },
       React.createElement("button", { onClick: () => setAdding(!adding), className: adding ? "btn-secondary" : "btn-primary", style: { flex: 1, padding: "12px", fontSize: 13 } }, adding ? "✕ Cancel" : "+ Add Item"),
       React.createElement("button", { onClick: async () => { if(window.FB) await window.FB.saveMenu(menu); setSaved(true); setTimeout(() => setSaved(false), 2000); }, className: "btn-green", style: { flex: 1, padding: "12px", fontSize: 13 } }, "💾 Save All")
     ),
 
-    // Add new item form
     adding && React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 16, border: "1.5px solid #BBF7D0" } },
-      React.createElement("div", { style: { fontWeight: 700, color: "#059669", marginBottom: 14, fontSize: 14 } }, "➕ Add New Item"),
+      React.createElement("div", { style: { fontWeight: 700, color: "#059669", marginBottom: 14, fontSize: 14 } }, isOwner ? "➕ Add New Item" : ("➕ Add New Item — " + branchName(branchScope))),
       React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 } },
         React.createElement("input", { className: "inp", placeholder: "Name (EN)*", value: newItem.name, onChange: e => setNewItem(p => ({...p, name: e.target.value})) }),
         React.createElement("input", { className: "inp", placeholder: "الاسم (AR)", value: newItem.nameAr, onChange: e => setNewItem(p => ({...p, nameAr: e.target.value})) }),
         React.createElement("input", { className: "inp", type: "number", placeholder: "Price SR*", value: newItem.price, onChange: e => setNewItem(p => ({...p, price: e.target.value})) }),
         React.createElement("input", { className: "inp", placeholder: "Emoji e.g. 🍗", value: newItem.emoji, onChange: e => setNewItem(p => ({...p, emoji: e.target.value})) }),
-        React.createElement("select", { className: "inp", style: { gridColumn: "span 2"}, value: newItem.category, onChange: e => setNewItem(p => ({...p, category: e.target.value})) },
+        React.createElement("select", { className: "inp", style: { gridColumn: "span 2" }, value: newItem.category, onChange: e => setNewItem(p => ({...p, category: e.target.value})) },
           categories.map(c => React.createElement("option", { key: c, value: c }, c))
         ),
-        React.createElement("input", { className: "inp", style: { gridColumn: "span 2"}, placeholder: "Calories e.g. 450 kcal (optional)", value: newItem.cal, onChange: e => setNewItem(p => ({...p, cal: e.target.value})) })
+        React.createElement("input", { className: "inp", style: { gridColumn: "span 2" }, placeholder: "Calories e.g. 450 kcal (optional)", value: newItem.cal, onChange: e => setNewItem(p => ({...p, cal: e.target.value})) }),
+        branchesChecklist(newItem.branches, (bs) => setNewItem(p => ({...p, branches: bs})))
       ),
       React.createElement("button", { onClick: addItem, className: "btn-green", style: { width: "100%", padding: "13px", fontSize: 14, marginTop: 12 } }, "✅ Add to Menu")
     ),
@@ -315,15 +434,24 @@ function MenuTabNew({ menu, setMenu }) {
           React.createElement("span", { style: { color: "#9CA3AF", fontSize: 11, fontWeight: 500, textTransform: "none", letterSpacing: 0 } }, "(" + items.length + ")")
         ),
         React.createElement("div", { className: "menu-grid" },
-          items.map((item, idx) =>
-            React.createElement("div", { key: item.id, className: "card menu-card" + (editingId === item.id ? " editing" : ""), style: { padding: "14px", opacity: item.available ? 1 : 0.5, animationDelay: (idx * 0.04) + "s" } },
+          items.map((item, idx) => {
+            const availHere = branchView === "all"
+              ? ((isOwner ? BRANCH_LIST.map(b=>b.id) : [branchScope]).every(bId => itemAvailableAt(item, bId)))
+              : itemAvailableAt(item, isOwner ? branchView : branchScope);
+            const branchBadge = (function(){
+              const bs = itemBranches(item);
+              if (bs.indexOf("all") >= 0) return "🏬 All";
+              return bs.map(bId => (BRANCH_LIST.find(b => b.id === bId) || {}).name || bId).join(", ");
+            })();
+            return React.createElement("div", { key: item.id, className: "card menu-card" + (editingId === item.id ? " editing" : ""), style: { padding: "14px", opacity: availHere ? 1 : 0.5, animationDelay: (idx * 0.04) + "s" } },
               editingId === item.id
                 ? React.createElement("div", { style: { width: "100%" } },
                     React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 } },
                       React.createElement("input", { className: "inp", value: editData.name, onChange: e => setEditData(p => ({...p, name: e.target.value})), placeholder: "Name EN" }),
                       React.createElement("input", { className: "inp", value: editData.nameAr, onChange: e => setEditData(p => ({...p, nameAr: e.target.value})), placeholder: "الاسم AR" }),
                       React.createElement("input", { className: "inp", type: "number", value: editData.price, onChange: e => setEditData(p => ({...p, price: e.target.value})), placeholder: "Price SR" }),
-                      React.createElement("input", { className: "inp", value: editData.emoji, onChange: e => setEditData(p => ({...p, emoji: e.target.value})), placeholder: "Emoji" })
+                      React.createElement("input", { className: "inp", value: editData.emoji, onChange: e => setEditData(p => ({...p, emoji: e.target.value})), placeholder: "Emoji" }),
+                      branchesChecklist(editData.branches, (bs) => setEditData(p => ({...p, branches: bs})))
                     ),
                     React.createElement("div", { style: { display: "flex", gap: 8 } },
                       React.createElement("button", { onClick: () => saveEdit(item.id), className: "btn-primary", style: { flex: 1, padding: "10px", fontSize: 13 } }, "✅ Save"),
@@ -335,20 +463,21 @@ function MenuTabNew({ menu, setMenu }) {
                       React.createElement("span", { style: { fontSize: 26, flexShrink: 0, lineHeight: 1 } }, item.emoji),
                       React.createElement("div", { style: { flex: 1, minWidth: 0 } },
                         React.createElement("div", { style: { fontWeight: 700, fontSize: 13.5, color: "#1A1D27", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, item.name),
-                        React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", minHeight: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, item.nameAr || "")
+                        React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", minHeight: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, item.nameAr || ""),
+                        React.createElement("div", { style: { fontSize: 10, color: "#059669", marginTop: 3, fontWeight: 600 } }, branchBadge)
                       )
                     ),
                     React.createElement("div", { key: "bot", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 } },
                       React.createElement("span", { style: { color: "#E60000", fontWeight: 800, fontSize: 15, flexShrink: 0 } }, "SR " + item.price),
                       React.createElement("div", { className: "m-actions", style: { display: "flex", gap: 6, flexShrink: 0 } },
-                        React.createElement("button", { onClick: () => { setEditingId(item.id); setEditData({ price: String(item.price), name: item.name, nameAr: item.nameAr || "", emoji: item.emoji || "" }); }, style: { background: "#F4F5F9", border: "none", color: "#6B7280", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13 } }, "✏️"),
-                        React.createElement("button", { onClick: () => toggleAvail(item.id), style: { background: item.available ? "#ECFDF5" : "#FFF1F2", border: "none", color: item.available ? "#059669" : "#E60000", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 700 } }, item.available ? "✅" : "❌"),
-                        React.createElement("button", { onClick: () => deleteItem(item.id), style: { background: "#FFF1F2", border: "none", color: "#E60000", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13 } }, "🗑️")
+                        isOwner && React.createElement("button", { onClick: () => { setEditingId(item.id); setEditData({ price: String(item.price), name: item.name, nameAr: item.nameAr || "", emoji: item.emoji || "", branches: itemBranches(item).slice() }); }, style: { background: "#F4F5F9", border: "none", color: "#6B7280", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13 } }, "✏️"),
+                        React.createElement("button", { onClick: () => toggleAvail(item.id), title: availHere ? "Turn OFF for " + (branchView === "all" ? "all branches" : branchName(isOwner ? branchView : branchScope)) : "Turn ON", style: { background: availHere ? "#ECFDF5" : "#FFF1F2", border: "none", color: availHere ? "#059669" : "#E60000", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 700 } }, availHere ? "✅" : "❌"),
+                        isOwner && React.createElement("button", { onClick: () => deleteItem(item.id), style: { background: "#FFF1F2", border: "none", color: "#E60000", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13 } }, "🗑️")
                       )
                     )
                   ]
-            )
-          )
+            );
+          })
         )
       )
     )
@@ -398,9 +527,161 @@ function CouponsTabNew() {
 }
 
 // ── SETTINGS TAB ──
+// ── PRINTER SETUP (settings sub-panel) ──
+// Full inline setup for QZ Tray thermal printing. Manager sees only their
+// branch printer; owner sees the default plus every branch.
+function PrinterSetup({ isOwner, branches, branchScope }) {
+  const TP = () => (typeof window !== "undefined" ? window.ThermalPrint : null);
+  const initial = () => (TP() && TP().getConfig ? TP().getConfig() : { printerName: "PP9000EU", copies: 1, autoPrint: true, printerMap: {} });
+  const [cfg, setCfg] = React.useState(initial());
+  const [connected, setConnected] = React.useState(false);
+  const [saved, setSaved] = React.useState(false);
+  const [detecting, setDetecting] = React.useState(false);
+  const [detected, setDetected] = React.useState([]);
+
+  React.useEffect(() => {
+    // Poll the printer bridge for connection status; the ThermalPrint module
+    // may still be booting when this section first mounts.
+    let alive = true;
+    const tick = () => {
+      const t = TP();
+      if (!alive || !t) return;
+      setConnected(!!(t.getStatus && t.getStatus()));
+    };
+    tick();
+    const id = setInterval(tick, 2000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  const detect = async () => {
+    if (typeof qz === "undefined") { alert("QZ Tray not loaded — install and start QZ Tray on this computer."); return; }
+    setDetecting(true);
+    try {
+      if (!qz.websocket.isActive()) await qz.websocket.connect();
+      const list = await qz.printers.find();
+      setDetected(Array.isArray(list) ? list : (list ? [list] : []));
+    } catch(e) { alert("Could not list printers: " + (e && e.message ? e.message : e)); }
+    finally { setDetecting(false); }
+  };
+
+  const setField = (k, v) => setCfg(c => Object.assign({}, c, { [k]: v }));
+  const setBranchPrinter = (branchId, v) => setCfg(c => {
+    const map = Object.assign({}, c.printerMap || {});
+    if (v) map[branchId] = v; else delete map[branchId];
+    return Object.assign({}, c, { printerMap: map });
+  });
+
+  const save = () => {
+    const t = TP(); if (!t) return;
+    t.setPrinterName(cfg.printerName || "PP9000EU");
+    t.setCopies(cfg.copies || 1);
+    t.setAutoPrint(!!cfg.autoPrint);
+    (branches || []).forEach(b => { t.setBranchPrinter(b.id, (cfg.printerMap && cfg.printerMap[b.id]) || ""); });
+    setSaved(true); setTimeout(() => setSaved(false), 2000);
+  };
+
+  const testPrint = (branchId) => {
+    const t = TP(); if (!t) { alert("Printer bridge not loaded."); return; }
+    t.print({
+      orderNo: "TEST", branch: branchId || (branchScope || "kakkiyah"),
+      orderType: "pickup", paymentMethod: "cash",
+      userName: "Test Print", userPhone: "0500000000",
+      items: [{ emoji: "🍗", name: "Test Item", qty: 1, price: 10 }],
+      total: 10, date: new Date().toISOString()
+    });
+  };
+
+  // Which branches the current user can configure printers for
+  const visibleBranches = isOwner ? (branches || []) : (branches || []).filter(b => b.id === branchScope);
+
+  const rowInput = (label, value, onChange, ph, extra) => React.createElement("div", { style: { marginBottom: 12 } },
+    React.createElement("label", { style: { display: "block", fontSize: 11, color: "#6B7280", marginBottom: 6, fontWeight: 700, letterSpacing: 0.3 } }, label),
+    React.createElement("div", { style: { display: "flex", gap: 8 } },
+      React.createElement("input", { className: "inp", value: value || "", onChange: e => onChange(e.target.value), placeholder: ph, style: { flex: 1 } }),
+      extra
+    )
+  );
+
+  return React.createElement("div", null,
+    saved && React.createElement("div", { style: { background: "#ECFDF5", border: "1px solid #BBF7D0", color: "#059669", padding: "12px 14px", borderRadius: 12, marginBottom: 14, fontWeight: 700, fontSize: 13 } }, "✅ Printer settings saved"),
+
+    // Connection status card
+    React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14, border: "1.5px solid " + (connected ? "#BBF7D0" : "#FECACA") } },
+      React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12 } },
+        React.createElement("div", { style: { width: 42, height: 42, borderRadius: 12, background: connected ? "#ECFDF5" : "#FEF2F2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 } }, connected ? "🟢" : "🔴"),
+        React.createElement("div", { style: { flex: 1 } },
+          React.createElement("div", { style: { fontWeight: 800, fontSize: 15, color: connected ? "#059669" : "#DC2626" } }, connected ? "QZ Tray connected" : "QZ Tray offline"),
+          React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 2 } },
+            connected ? "Ready for silent thermal printing." : "Install QZ Tray on this computer and make sure it's running.")
+        ),
+        !connected && React.createElement("a", { href: "https://qz.io/download/", target: "_blank", style: { background: "#FFF7ED", border: "1px solid #FED7AA", color: "#EA580C", padding: "9px 14px", borderRadius: 10, fontSize: 12, fontWeight: 700, textDecoration: "none" } }, "Download →")
+      )
+    ),
+
+    // Auto-print + copies
+    React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14 } },
+      React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } },
+        React.createElement("div", null,
+          React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27" } }, "Auto-print accepted orders"),
+          React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 2 } }, "Print silently the moment an order is accepted")
+        ),
+        React.createElement("label", { style: { display: "inline-flex", cursor: "pointer" } },
+          React.createElement("input", { type: "checkbox", checked: !!cfg.autoPrint, onChange: e => setField("autoPrint", e.target.checked), style: { width: 40, height: 24 } })
+        )
+      ),
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } },
+        React.createElement("div", null,
+          React.createElement("label", { style: { display: "block", fontSize: 11, color: "#6B7280", marginBottom: 6, fontWeight: 700 } }, "COPIES"),
+          React.createElement("input", { className: "inp", type: "number", min: 1, max: 9, value: cfg.copies || 1, onChange: e => setField("copies", Math.max(1, parseInt(e.target.value, 10) || 1)) })
+        ),
+        React.createElement("div", null,
+          React.createElement("label", { style: { display: "block", fontSize: 11, color: "#6B7280", marginBottom: 6, fontWeight: 700 } }, "DETECT PRINTERS"),
+          React.createElement("button", { onClick: detect, disabled: detecting, className: "btn-secondary", style: { width: "100%", padding: "11px", fontSize: 12 } }, detecting ? "Scanning…" : "🔍 Scan connected printers")
+        )
+      ),
+      detected.length > 0 && React.createElement("div", { style: { marginTop: 10, background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 10, padding: "10px 12px", fontSize: 12, color: "#374151" } },
+        React.createElement("div", { style: { fontWeight: 700, marginBottom: 6 } }, "Printers found:"),
+        detected.map((p, i) => React.createElement("div", { key: i, style: { fontFamily: "monospace", fontSize: 11.5, padding: "2px 0" } }, "• " + p))
+      )
+    ),
+
+    // Default / fallback printer (owner only)
+    isOwner && React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 4 } }, "Default printer"),
+      React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 14 } }, "Used when a branch doesn't have its own printer configured."),
+      rowInput("PRINTER NAME (as seen by QZ Tray)", cfg.printerName, v => setField("printerName", v), "e.g. PP9000EU",
+        React.createElement("button", { onClick: () => testPrint(""), className: "btn-secondary", style: { padding: "0 14px", fontSize: 12 } }, "🖨️ Test"))
+    ),
+
+    // Per-branch printers
+    React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 4 } }, isOwner ? "Per-branch printers" : "Your branch printer"),
+      React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 14 } }, "Leave a branch blank to fall back to the default printer."),
+      visibleBranches.map(b => React.createElement("div", { key: b.id, style: { marginBottom: 12 } },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } },
+          React.createElement("span", { style: { fontSize: 15 } }, "🏪"),
+          React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#1A1D27" } }, b.name),
+          React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF" } }, "· " + (b.nameAr || ""))
+        ),
+        React.createElement("div", { style: { display: "flex", gap: 8 } },
+          React.createElement("input", { className: "inp", value: (cfg.printerMap && cfg.printerMap[b.id]) || "", onChange: e => setBranchPrinter(b.id, e.target.value), placeholder: "leave blank to use default", style: { flex: 1 } }),
+          React.createElement("button", { onClick: () => testPrint(b.id), className: "btn-secondary", style: { padding: "0 14px", fontSize: 12 } }, "🖨️ Test")
+        )
+      ))
+    ),
+
+    React.createElement("button", { onClick: save, className: "btn-primary", style: { width: "100%", padding: "14px", fontSize: 14, marginTop: 4 } }, "💾 Save printer settings"),
+
+    React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", marginTop: 12, lineHeight: 1.55, padding: "0 4px" } },
+      "Uses QZ Tray for silent ESC/POS raw printing — no OS dialog appears. Install QZ Tray on each computer that has a thermal printer attached. Printer names must match exactly what appears in Windows / Mac printer settings."
+    )
+  );
+}
+
 function SettingsTabNew(props) {
   const settingsIsOwner = !!(props && props.isOwner);
   const settingsBranches = (props && props.branches) || [];
+  const settingsBranchScope = (props && props.branchScope) || null;
   const settingsLogout = (props && props.doLogout) || (() => {});
   const settingsEmail = (props && props.authEmail) || "";
   const [restaurantOpen, setRestaurantOpen] = React.useState(true);
@@ -450,6 +731,7 @@ function SettingsTabNew(props) {
   const sectionTabs = [
     { id: "general", label: "General" },
     { id: "orders", label: "Orders" },
+    { id: "printer", label: "Printer" },
     { id: "branches", label: "Branches" },
     { id: "system", label: "System" },
   ];
@@ -539,6 +821,9 @@ function SettingsTabNew(props) {
       )
     ),
 
+    // Printer section
+    section === "printer" && React.createElement(PrinterSetup, { isOwner: settingsIsOwner, branches: settingsBranches, branchScope: settingsBranchScope }),
+
     // Branches section
     section === "branches" && React.createElement("div", null,
       [
@@ -590,8 +875,8 @@ function SettingsTabNew(props) {
       )
     ),
 
-    // Save button
-    React.createElement("button", {
+    // Save button (hidden on the Printer section — it has its own Save)
+    section !== "printer" && React.createElement("button", {
       onClick: saveAll,
       className: "btn-primary",
       style: { width: "100%", padding: "16px", fontSize: 15, marginTop: 16 }
@@ -1843,6 +2128,35 @@ function App() {
     }
   };
 
+  // Accept a new order → set status to preparing AND print the receipt immediately.
+  // The order was already received from Firestore in real time; this is the one-tap confirm.
+  const handleAcceptOrder = async (order) => {
+    if (window.ThermalPrint) {
+      // Pre-claim so the Firestore onSnapshot->auto-print hook can't race with us.
+      try { window.ThermalPrint.markPrinted(order); } catch(_) {}
+      try { await window.ThermalPrint.print(order); } catch(_) {}
+    }
+    await handleStatusChange(order.orderNo, "preparing");
+  };
+  const handleDeclineOrder = async (order) => {
+    const reason = window.prompt("Reason for declining order #" + order.orderNo + " (optional):", "");
+    if (reason === null) return; // Cancel pressed
+    setOrders(p => p.map(o => o.orderNo === order.orderNo ? {...o, status: "cancelled", declineReason: reason} : o));
+    if (order.fbId && window.FB) {
+      try { await window.FB.updateOrderStatus(order.fbId, "cancelled"); } catch(_) {}
+      try { if (window.FB.updateOrderField) await window.FB.updateOrderField(order.fbId, "declineReason", reason || ""); } catch(_) {}
+    }
+    if (order.userPhone) {
+      const ph = order.userPhone.startsWith("0") ? "966" + order.userPhone.slice(1) : order.userPhone;
+      const sep = String.fromCharCode(10);
+      const lines = ["Broast Albahr", "", "Hi " + (order.userName||"Customer") + ",",
+        "We're sorry — order #" + order.orderNo + " could not be accepted right now."];
+      if (reason) lines.push("Reason: " + reason);
+      lines.push("", "Please contact us if you need help.");
+      window.open("https://wa.me/" + ph + "?text=" + encodeURIComponent(lines.join(sep)), "_blank");
+    }
+  };
+
   const updateMenu = (m) => { setMenu(m); if(window.FB) window.FB.saveMenu(m); };
 
   // Auto-close restaurant at 3:00 AM every day
@@ -1869,7 +2183,7 @@ function App() {
     { id: "orders", icon: "📦", label: "Orders", badge: newCount > 0 ? newCount : null },
     { id: "analytics", icon: "📊", label: "Stats" },
     { id: "reports", icon: "🧾", label: "Reports" },
-    { id: "menu", icon: "🍗", label: "Menu", ownerOnly: true },
+    { id: "menu", icon: "🍗", label: "Menu" },
     { id: "coupons", icon: "🎟️", label: "Coupons", ownerOnly: true },
     { id: "customers", icon: "👥", label: "Customers" },
     { id: "settings", icon: "⚙️", label: "Settings" },
@@ -2059,10 +2373,6 @@ function App() {
     React.createElement("div", { style: { padding: "18px 14px" } },
       // Tab content
       tab === "orders" && React.createElement("div", null,
-        newOrderAlert && React.createElement("div", { style: { background: "#FFF1F2", border: "1.5px solid #FECACA", borderRadius: 16, padding: "13px 16px", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center" } },
-          React.createElement("span", { style: { color: "#E60000", fontWeight: 700, fontSize: 13 } }, "🔔 New order received!"),
-          React.createElement("button", { onClick: () => setNewOrderAlert(false), style: { background: "none", border: "none", color: "#9CA3AF", cursor: "pointer", fontSize: 16 } }, "✕")
-        ),
         (() => {
           const todayStr = new Date().toDateString();
           const todayOrders = orders.filter(o => new Date(o.date).toDateString() === todayStr);
@@ -2085,17 +2395,17 @@ function App() {
                   React.createElement("div", { style: { color: "#6B7280", fontSize: 14, fontWeight: 500 } }, orderFilter === "all" ? "No orders today" : "No " + orderFilter + " orders today"),
                   React.createElement("div", { style: { color: "#9CA3AF", fontSize: 12, marginTop: 6 } }, "Orders appear here in real time")
                 )
-              : filteredOrders.map(o => React.createElement(OrderCard, { key: o.fbId || o.orderNo, order: o, onStatusChange: handleStatusChange, isNew: o.status === "new" }))
+              : filteredOrders.map(o => React.createElement(OrderCard, { key: o.fbId || o.orderNo, order: o, onStatusChange: handleStatusChange, onAccept: handleAcceptOrder, onDecline: handleDeclineOrder, isNew: o.status === "new" }))
           );
         })()
       ),
       tab === "home" && isOwner && React.createElement(OwnerHome, { orders: orders, branches: BRANCHES, onOpenBranch: id => { setSelectedBranch(id); setTab("orders"); } }),
       tab === "analytics" && React.createElement(AnalyticsTabNew, { orders: orders }),
       tab === "reports" && React.createElement(ReportsTabNew, { orders: orders, branches: BRANCHES, scopedBranchId: branchScope }),
-      tab === "menu" && isOwner && React.createElement(MenuTabNew, { menu: menu, setMenu: updateMenu }),
+      tab === "menu" && React.createElement(MenuTabNew, { menu: menu, setMenu: updateMenu, isOwner: isOwner, branches: BRANCHES, branchScope: branchScope }),
       tab === "coupons" && isOwner && React.createElement(CouponsTabNew, null),
       tab === "customers" && React.createElement(CustomersTabNew, { customers: customers }),
-      tab === "settings" && React.createElement(SettingsTabNew, { isOwner: isOwner, branches: BRANCHES, doLogout: doLogout, authEmail: authUser && authUser.email })
+      tab === "settings" && React.createElement(SettingsTabNew, { isOwner: isOwner, branches: BRANCHES, branchScope: branchScope, doLogout: doLogout, authEmail: authUser && authUser.email })
     ),
 
     // Bottom navigation
@@ -2180,6 +2490,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         saveSettings: async function(d){ try{ await setDoc(doc(_db,"settings","restaurant"),Object.assign({},d,{updatedAt:serverTimestamp()})); return true; }catch(e){ window.__fbErr("settings",e); return false; } },
         saveOrder: async function(o){ try{ await addDoc(collection(_db,"orders"),Object.assign({},o,{createdAt:serverTimestamp(),status:"new"})); return true; }catch(e){ window.__fbErr("order",e); return false; } },
         updateOrderStatus: async function(id,s){ try{ await updateDoc(doc(_db,"orders",id),{status:s,updatedAt:serverTimestamp()}); return true; }catch(e){ window.__fbErr("order status",e); return false; } },
+        updateOrderField: async function(id, field, value){ try{ var patch={}; patch[field]=value; patch.updatedAt=serverTimestamp(); await updateDoc(doc(_db,"orders",id), patch); return true; }catch(e){ window.__fbErr("order field",e); return false; } },
         saveCustomer: async function(d){ try{ await setDoc(doc(_db,"customers",d.phone),Object.assign({},d,{lastSeen:serverTimestamp()}),{merge:true}); }catch(e){} },
         getAccounts: async function(){ try{ var s=await getDoc(doc(_db,"settings","accounts")); return s.exists()?s.data():null; }catch(e){ return null; } },
         saveAccounts: async function(a){ try{ await setDoc(doc(_db,"settings","accounts"),Object.assign({},a,{updatedAt:serverTimestamp()}),{merge:true}); return true; }catch(e){ window.__fbErr("accounts",e); return false; } },
@@ -2409,13 +2720,16 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     }
 
     // ── Auto-print hook (called from orders listener) ───────
+    // Auto-print now fires only when an order transitions to "preparing"
+    // (i.e., after the user pressed Accept). New orders sit as "new"
+    // until an operator confirms — no surprise prints, no fake banners.
     function _dedupKey(o) { return o.fbId || o.orderNo || ""; }
 
     function handleIncomingOrders(orders) {
       if (!AUTO_PRINT) return;
 
-      // On first load, mark ALL existing orders as already printed
-      // so we only print orders that arrive AFTER the page opens
+      // On first load, mark every already-known order as printed so
+      // reopening the app doesn't re-print history.
       if (FIRST_LOAD) {
         orders.forEach(function (o) { PRINTED_IDS.add(_dedupKey(o)); });
         FIRST_LOAD = false;
@@ -2423,9 +2737,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       }
 
       orders.filter(function (o) {
-        if (o.status !== "new") return false;
+        if (o.status !== "preparing") return false;
         if (PRINTED_IDS.has(_dedupKey(o))) return false;
-        // Only print orders matching this branch (skip if owner view)
         if (BRANCH_FILTER && BRANCH_FILTER !== "all" && o.branch !== BRANCH_FILTER) return false;
         return true;
       }).forEach(function (o, i) {
@@ -2667,7 +2980,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       setCopies: function (n) { COPIES = Math.max(1, parseInt(n,10)||1); saveCfg(); },
       setBranchFilter: function (b) { BRANCH_FILTER = b; console.log("🖨️ Print filter set to branch: " + b); },
       getStatus: function () { return qz && qz.websocket.isActive(); },
-      getConfig: function () { return { printerName: PRINTER_NAME, copies: COPIES, autoPrint: AUTO_PRINT, printerMap: Object.assign({}, PRINTER_MAP) }; }
+      getConfig: function () { return { printerName: PRINTER_NAME, copies: COPIES, autoPrint: AUTO_PRINT, printerMap: Object.assign({}, PRINTER_MAP) }; },
+      // Pre-claim a dedup key so the Firestore listener's auto-print hook
+      // won't race with an explicit Accept-triggered print.
+      markPrinted: function (order) { if (order) PRINTED_IDS.add(_dedupKey(order)); }
     };
   })();
   </script>
