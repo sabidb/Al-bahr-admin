@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.4.0";
+const APP_VERSION = "8.4.1";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -2665,15 +2665,19 @@ function App() {
   // was placed before startup and should never be auto-accepted.
   const seenOnLoadRef = React.useRef(null);
   const autoAcceptedRef = React.useRef(new Set());
+  // Sound + browser-push are gated on settings.soundOn, which is edited in
+  // SettingsTabNew. That state doesn't live here, so we read the flag out of
+  // the Firestore settings doc via the existing onSettingsChange listener
+  // (see the getSettings/onSettingsChange block further down) and mirror it
+  // into soundOnRef. Default: on.
   const soundOnRef = React.useRef(true);
   const alertedRef = React.useRef(new Set());
-  React.useEffect(() => { soundOnRef.current = soundOn; }, [soundOn]);
-  // Ask for browser notification permission once, when the operator toggles sound on.
+  // Ask for browser notification permission once at boot (fine to skip if
+  // sound ends up off — the fireBrowserPush guard also re-checks).
   React.useEffect(() => {
-    if (!soundOn) return;
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (Notification.permission === "default") { try { Notification.requestPermission(); } catch(_) {} }
-  }, [soundOn]);
+  }, []);
   // Reusable "new order" chime — pleasant two-note ding via WebAudio (no asset needed).
   function playChime() {
     if (!soundOnRef.current) return;
@@ -2764,13 +2768,18 @@ function App() {
           const _u = window.FB.onInvoiceConfigChange(c => { if (c && window.ThermalPrint) window.ThermalPrint.setInvoiceConfig(c); });
           if (!window.__invUnsub) window.__invUnsub = _u;
         }
-        // Restaurant settings drive the auto-accept + auto-print toggle.
+        // Restaurant settings drive the auto-accept + sound toggles.
         try {
           const s = await window.FB.getSettings();
           if (s && typeof s.autoAccept !== "undefined") autoAcceptRef.current = !!s.autoAccept;
+          if (s && typeof s.soundOn !== "undefined") soundOnRef.current = !!s.soundOn;
         } catch(_) {}
         if (window.FB.onSettingsChange) {
-          const _u = window.FB.onSettingsChange(s => { if (s) autoAcceptRef.current = !!s.autoAccept; });
+          const _u = window.FB.onSettingsChange(s => {
+            if (!s) return;
+            if (typeof s.autoAccept !== "undefined") autoAcceptRef.current = !!s.autoAccept;
+            if (typeof s.soundOn !== "undefined") soundOnRef.current = !!s.soundOn;
+          });
           if (!window.__setUnsub) window.__setUnsub = _u;
         }
         unsubOrders = window.FB.onOrdersChange(fbOrders => {
