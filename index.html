@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.4.1";
+const APP_VERSION = "8.5.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -131,15 +131,17 @@ function OrderCard({ order, onStatusChange, onAccept, onDecline, onAssignDriver,
   const [ovAmount, setOvAmount] = React.useState("");
   const [ovReason, setOvReason] = React.useState("");
   const statusCfg = {
-    new:       { bg: "#FFF7ED", border: "#FED7AA", dot: "#F97316", label: "New",       tag: "tag-orange" },
-    pending:   { bg: "#FFF7ED", border: "#FED7AA", dot: "#F97316", label: "Pending",   tag: "tag-orange" },
-    accepted:  { bg: "#ECFEFF", border: "#A5F3FC", dot: "#0891B2", label: "Accepted",  tag: "tag-blue"   },
-    preparing: { bg: "#FFFBEB", border: "#FDE68A", dot: "#D97706", label: "Preparing", tag: "tag-yellow" },
-    ready:     { bg: "#F0FDF4", border: "#BBF7D0", dot: "#059669", label: "Ready",     tag: "tag-green"  },
-    done:      { bg: "#EFF6FF", border: "#BFDBFE", dot: "#2563EB", label: "Completed", tag: "tag-blue"   },
-    completed: { bg: "#EFF6FF", border: "#BFDBFE", dot: "#2563EB", label: "Completed", tag: "tag-blue"   },
-    cancelled: { bg: "#FEF2F2", border: "#FECACA", dot: "#DC2626", label: "Declined",  tag: "tag-red"    },
-    refunded:  { bg: "#FAF5FF", border: "#E9D5FF", dot: "#9333EA", label: "Refunded",  tag: "tag-purple" },
+    new:          { bg: "#FFF7ED", border: "#FED7AA", dot: "#F97316", label: "New",          tag: "tag-orange" },
+    pending:      { bg: "#FFF7ED", border: "#FED7AA", dot: "#F97316", label: "Pending",      tag: "tag-orange" },
+    accepted:     { bg: "#ECFEFF", border: "#A5F3FC", dot: "#0891B2", label: "Accepted",     tag: "tag-blue"   },
+    preparing:    { bg: "#FFFBEB", border: "#FDE68A", dot: "#D97706", label: "Preparing",    tag: "tag-yellow" },
+    cooking:      { bg: "#FFF7ED", border: "#FDBA74", dot: "#EA580C", label: "Cooking",      tag: "tag-orange" },
+    almost_ready: { bg: "#ECFDF5", border: "#A7F3D0", dot: "#10B981", label: "Almost Ready", tag: "tag-green"  },
+    ready:        { bg: "#F0FDF4", border: "#BBF7D0", dot: "#059669", label: "Ready",        tag: "tag-green"  },
+    done:         { bg: "#EFF6FF", border: "#BFDBFE", dot: "#2563EB", label: "Completed",    tag: "tag-blue"   },
+    completed:    { bg: "#EFF6FF", border: "#BFDBFE", dot: "#2563EB", label: "Completed",    tag: "tag-blue"   },
+    cancelled:    { bg: "#FEF2F2", border: "#FECACA", dot: "#DC2626", label: "Declined",     tag: "tag-red"    },
+    refunded:     { bg: "#FAF5FF", border: "#E9D5FF", dot: "#9333EA", label: "Refunded",     tag: "tag-purple" },
   };
   // Treat the legacy initial value "new" as pending and "done" as completed so
   // historical orders and the newer 7-status pipeline render identically.
@@ -256,6 +258,16 @@ function OrderCard({ order, onStatusChange, onAccept, onDecline, onAssignDriver,
           }, "❌ Decline")
         ),
         order.status === "preparing" && React.createElement("button", {
+          onClick: () => onStatusChange(order.orderNo, "ready"),
+          className: "btn-green",
+          style: { flex: 1, padding: "11px", fontSize: 13 }
+        }, "✅ Mark Ready"),
+        order.status === "cooking" && React.createElement("button", {
+          onClick: () => onStatusChange(order.orderNo, "ready"),
+          className: "btn-green",
+          style: { flex: 1, padding: "11px", fontSize: 13 }
+        }, "✅ Mark Ready"),
+        order.status === "almost_ready" && React.createElement("button", {
           onClick: () => onStatusChange(order.orderNo, "ready"),
           className: "btn-green",
           style: { flex: 1, padding: "11px", fontSize: 13 }
@@ -1984,7 +1996,7 @@ function ReportsTabNew({ orders, branches, scopedBranchId }) {
   const [branchSel, setBranchSel]   = React.useState(scopedBranchId ? [scopedBranchId] : branches.map(b => b.id));
   const [typeSel, setTypeSel]       = React.useState(["pickup", "delivery"]);
   const [paySel, setPaySel]         = React.useState(["cash", "prepaid"]);
-  const [statusSel, setStatusSel]   = React.useState(["new", "preparing", "ready", "done"]);
+  const [statusSel, setStatusSel]   = React.useState(["new", "preparing", "cooking", "almost_ready", "ready", "done"]);
   const [minAmt, setMinAmt]         = React.useState("");
   const [maxAmt, setMaxAmt]         = React.useState("");
   const [search, setSearch]         = React.useState("");
@@ -2053,7 +2065,7 @@ function ReportsTabNew({ orders, branches, scopedBranchId }) {
   function metricsFor(list) {
     const m = { count: list.length, gross: 0, net: 0, vat: 0, pFee: 0, dFee: 0,
       pickup: 0, delivery: 0, pickupRev: 0, deliveryRev: 0,
-      pay: { cash: 0, prepaid: 0 }, status: { new: 0, preparing: 0, ready: 0, done: 0 },
+      pay: { cash: 0, prepaid: 0 }, status: { new: 0, preparing: 0, cooking: 0, almost_ready: 0, ready: 0, done: 0 },
       items: {}, buckets: {}, hourly: {}, dow: {}, customers: {}, branch: {} };
     list.forEach(o => {
       const total = o.total || 0;
@@ -2126,7 +2138,7 @@ function ReportsTabNew({ orders, branches, scopedBranchId }) {
     setPreset("30");
     setBranchSel(isScoped ? [scopedBranchId] : branches.map(b => b.id));
     setTypeSel(["pickup", "delivery"]); setPaySel(["cash", "prepaid"]);
-    setStatusSel(["new", "preparing", "ready", "done"]);
+    setStatusSel(["new", "preparing", "cooking", "almost_ready", "ready", "done"]);
     setMinAmt(""); setMaxAmt(""); setSearch(""); setGroupBy("day");
   }
 
@@ -2239,7 +2251,7 @@ function ReportsTabNew({ orders, branches, scopedBranchId }) {
       // Status
       React.createElement("div", { style: { fontWeight: 700, fontSize: 11, color: "#6B7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" } }, "Status"),
       React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 } },
-        ["new", "preparing", "ready", "done"].map(s => chip(statusSel.includes(s), s.charAt(0).toUpperCase() + s.slice(1), () => setStatusSel(prev => toggleIn(prev, s))))),
+        ["new", "preparing", "cooking", "almost_ready", "ready", "done"].map(s => chip(statusSel.includes(s), s.charAt(0).toUpperCase() + s.slice(1), () => setStatusSel(prev => toggleIn(prev, s))))),
       // Amount + Group-by + Search
       React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 } },
         React.createElement("div", null,
@@ -2313,7 +2325,7 @@ function ReportsTabNew({ orders, branches, scopedBranchId }) {
           kv("💵 Cash", (o.pay.cash || 0) + " orders"),
           kv("💳 Prepaid", (o.pay.prepaid || 0) + " orders"))),
         sectionCard("Status", React.createElement("div", null,
-          ["new", "preparing", "ready", "done"].map(s => kv(s.charAt(0).toUpperCase() + s.slice(1), (o.status[s] || 0) + " orders")))),
+          ["new", "preparing", "cooking", "almost_ready", "ready", "done"].map(s => kv(s.charAt(0).toUpperCase() + s.slice(1), (o.status[s] || 0) + " orders")))),
         !isScoped && Object.keys(o.branch).length > 1 && sectionCard("By Branch",
           simpleTable(["Branch", "Orders", "Gross", "Net"],
             Object.entries(o.branch).map(([id, v]) => [branchName(id), v.count, money(v.gross), money(v.net)]))));
@@ -2870,16 +2882,23 @@ function App() {
     setOrders(p => p.map(o => o.orderNo === orderNo ? {...o, status: next} : o));
     const order = orders.find(o => o.orderNo === orderNo);
     if (order && order.fbId && window.FB) await window.FB.updateOrderStatus(order.fbId, next);
+    // Clear auto-progression timers if manually overridden to ready/done/cancelled
+    if (["ready", "done", "completed", "cancelled", "refunded"].includes(next) && autoTimersRef.current[orderNo]) {
+      autoTimersRef.current[orderNo].forEach(clearTimeout);
+      delete autoTimersRef.current[orderNo];
+    }
     // Fire the customer-side inbox notification for every real status
     // transition — the customer app's NotificationsSheet picks it up live.
     if (order && order.userPhone && window.FB && window.FB.sendNotification) {
       const CUSTOMER_MSG = {
-        accepted:  { title: "Order accepted",      titleAr: "تم قبول الطلب",       body: "We got your order #" + order.orderNo + " — starting shortly.",       bodyAr: "استلمنا طلبك #" + order.orderNo + " — سنبدأ التحضير قريباً." },
-        preparing: { title: "Preparing your order", titleAr: "قيد التحضير",         body: "Order #" + order.orderNo + " is being prepared.",                     bodyAr: "طلبك #" + order.orderNo + " قيد التحضير الآن." },
-        ready:     { title: "Ready for pickup",     titleAr: "جاهز للاستلام",       body: "Order #" + order.orderNo + " is ready — come collect it!",           bodyAr: "طلبك #" + order.orderNo + " جاهز للاستلام — تفضل بالحضور!" },
-        completed: { title: "Order completed",      titleAr: "تم إكمال الطلب",      body: "Thank you! Enjoy your Broast Albahr.",                                 bodyAr: "شكراً لك! نتمنى لك وجبة شهية." },
-        cancelled: { title: "Order cancelled",      titleAr: "تم إلغاء الطلب",      body: "Order #" + order.orderNo + " was cancelled. Contact us if this was a mistake.", bodyAr: "تم إلغاء طلبك #" + order.orderNo + ". تواصل معنا إذا كان بالخطأ." },
-        refunded:  { title: "Refund issued",        titleAr: "تم إصدار الاسترجاع", body: "Order #" + order.orderNo + " was refunded.",                            bodyAr: "تم استرجاع طلبك #" + order.orderNo + "." },
+        accepted:     { title: "Order accepted",          titleAr: "تم قبول الطلب",           body: "We got your order #" + order.orderNo + " — starting shortly.",                bodyAr: "استلمنا طلبك #" + order.orderNo + " — سنبدأ التحضير قريباً." },
+        preparing:    { title: "Your order is preparing",  titleAr: "طلبك قيد التحضير",        body: "Order #" + order.orderNo + " is being prepared. Will be ready in ~15 min.",    bodyAr: "طلبك #" + order.orderNo + " قيد التحضير الآن. سيكون جاهزاً خلال ~15 دقيقة." },
+        cooking:      { title: "Cooking your order",       titleAr: "يتم طبخ طلبك",            body: "Order #" + order.orderNo + " is cooking now! ~10 min remaining.",              bodyAr: "طلبك #" + order.orderNo + " يُطبخ الآن! متبقي ~10 دقائق." },
+        almost_ready: { title: "Almost ready!",            titleAr: "طلبك على وشك الجهوز!",    body: "Order #" + order.orderNo + " is almost ready! ~5 min remaining.",              bodyAr: "طلبك #" + order.orderNo + " على وشك الجهوز! متبقي ~5 دقائق." },
+        ready:        { title: "Your order is ready!",     titleAr: "طلبك جاهز!",              body: "Order #" + order.orderNo + " is ready — come collect it!",                    bodyAr: "طلبك #" + order.orderNo + " جاهز للاستلام — تفضل بالحضور!" },
+        completed:    { title: "Order completed",          titleAr: "تم إكمال الطلب",          body: "Thank you! Enjoy your Broast Albahr.",                                         bodyAr: "شكراً لك! نتمنى لك وجبة شهية." },
+        cancelled:    { title: "Order cancelled",          titleAr: "تم إلغاء الطلب",          body: "Order #" + order.orderNo + " was cancelled. Contact us if this was a mistake.", bodyAr: "تم إلغاء طلبك #" + order.orderNo + ". تواصل معنا إذا كان بالخطأ." },
+        refunded:     { title: "Refund issued",            titleAr: "تم إصدار الاسترجاع",     body: "Order #" + order.orderNo + " was refunded.",                                    bodyAr: "تم استرجاع طلبك #" + order.orderNo + "." },
       };
       // "done" is the legacy value the Complete button still writes; map it
       // onto the completed message so finishing an order always notifies.
@@ -2892,22 +2911,42 @@ function App() {
       const ph = order.userPhone.startsWith("0") ? "966" + order.userPhone.slice(1) : order.userPhone;
       const sep = String.fromCharCode(10);
       const lines = ["Broast Albahr", "", "Hi " + order.userName + "!"];
-      if (next === "preparing") { lines.push("Your order #" + order.orderNo + " is being prepared!"); lines.push("We'll notify you when it's ready."); }
+      if (next === "preparing") { lines.push("Your order #" + order.orderNo + " is being prepared!"); lines.push("Will be ready in ~15 minutes."); }
       else { lines.push("Your order #" + order.orderNo + " is READY! 🎉"); lines.push(order.orderType === "pickup" ? "Please come pick it up!" : "Your order is on the way!"); }
       lines.push("", "— Broast Albahr");
       window.open("https://wa.me/" + ph + "?text=" + encodeURIComponent(lines.join(sep)), "_blank");
     }
   };
 
-  // Accept a new order → set status to preparing AND print the receipt immediately.
-  // The order was already received from Firestore in real time; this is the one-tap confirm.
+  // Auto-progression timers per order (keyed by orderNo).
+  const autoTimersRef = React.useRef({});
+
+  // Accept a new order → set status to preparing, print the receipt,
+  // then auto-progress: 5 min → cooking, 10 min → almost_ready, 15 min → ready.
   const handleAcceptOrder = async (order) => {
     if (window.ThermalPrint) {
-      // Pre-claim so the Firestore onSnapshot->auto-print hook can't race with us.
       try { window.ThermalPrint.markPrinted(order); } catch(_) {}
       try { await window.ThermalPrint.print(order); } catch(_) {}
     }
     await handleStatusChange(order.orderNo, "preparing");
+
+    // Clear any existing timers for this order
+    if (autoTimersRef.current[order.orderNo]) {
+      autoTimersRef.current[order.orderNo].forEach(clearTimeout);
+    }
+
+    const timers = [
+      setTimeout(async () => {
+        await handleStatusChange(order.orderNo, "cooking");
+      }, 5 * 60 * 1000),
+      setTimeout(async () => {
+        await handleStatusChange(order.orderNo, "almost_ready");
+      }, 10 * 60 * 1000),
+      setTimeout(async () => {
+        await handleStatusChange(order.orderNo, "ready");
+      }, 15 * 60 * 1000),
+    ];
+    autoTimersRef.current[order.orderNo] = timers;
   };
   const handleDeclineOrder = async (order) => {
     const reason = window.prompt("Reason for declining order #" + order.orderNo + " (optional):", "");
@@ -3200,7 +3239,7 @@ function App() {
           const filteredOrders = orderFilter === "all" ? todayOrders : todayOrders.filter(o => o.status === orderFilter);
           return React.createElement(React.Fragment, null,
             React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 14, overflowX: "auto", paddingBottom: 4 } },
-              ["all","new","preparing","ready","done"].map(s => {
+              ["all","new","preparing","cooking","almost_ready","ready","done"].map(s => {
                 const count = s === "all" ? todayOrders.length : todayOrders.filter(o => o.status === s).length;
                 const active = orderFilter === s;
                 return React.createElement("button", {
@@ -3581,9 +3620,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
           if (order.subtotal !== undefined) lines.push(pad("Subtotal", "SR " + Number(order.subtotal).toFixed(2)) + LF);
           if (order.platformFee) lines.push(pad("Platform Fee", "SR " + Number(order.platformFee).toFixed(2)) + LF);
           if (order.deliveryFee) lines.push(pad("Delivery Fee", "SR " + Number(order.deliveryFee).toFixed(2)) + LF);
-          if (order.vat) lines.push(pad("VAT 15%", "SR " + Number(order.vat).toFixed(2)) + LF);
         }
         lines.push(BOLD_ON + pad("TOTAL", "SR " + total.toFixed(2)) + BOLD_OFF + LF);
+        var inclVat = order.vat || Math.round(total / 1.15 * 0.15 * 100) / 100;
+        lines.push(CENTER + "(Prices incl. 15% VAT: SR " + inclVat.toFixed(2) + ")" + LF);
         lines.push(line("="));
       }
 
@@ -3673,8 +3713,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
             (C.showSubtotalBreakdown && order.subtotal !== undefined ? "<div class='row'><span>Subtotal</span><span>SR " + Number(order.subtotal).toFixed(2) + "</span></div>" : "") +
             (C.showSubtotalBreakdown && order.platformFee ? "<div class='row'><span>Platform Fee</span><span>SR " + Number(order.platformFee).toFixed(2) + "</span></div>" : "") +
             (C.showSubtotalBreakdown && order.deliveryFee ? "<div class='row'><span>Delivery Fee</span><span>SR " + Number(order.deliveryFee).toFixed(2) + "</span></div>" : "") +
-            (C.showSubtotalBreakdown && order.vat ? "<div class='row'><span>VAT 15%</span><span>SR " + Number(order.vat).toFixed(2) + "</span></div>" : "") +
-            "<div class='row b big'><span>TOTAL</span><span>SR " + total.toFixed(2) + "</span></div><hr class='dbl'/>" : "") +
+            "<div class='row b big'><span>TOTAL</span><span>SR " + total.toFixed(2) + "</span></div>" +
+            "<div class='c sm'>(Prices incl. 15% VAT: SR " + (order.vat || Math.round(total / 1.15 * 0.15 * 100) / 100).toFixed(2) + ")</div><hr class='dbl'/>" : "") +
           (C.showLoyalty ? "<div class='c b'>" + esc(C.loyaltyLabel || "Loyalty Points") + "</div><div class='c'>Earned this order: +" + pts + " pts</div><hr/>" : "") +
           ((C.showTaxNumber && C.taxNumber) ? "<div class='row'><span class='b'>Tax#</span><span>" + esc(C.taxNumber) + "</span></div>" : "") +
           ((C.showVatNumber && C.vatNumber) ? "<div class='row'><span class='b'>VAT#</span><span>" + esc(C.vatNumber) + "</span></div>" : "") +
