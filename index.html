@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.5.0";
+const APP_VERSION = "8.6.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -191,9 +191,14 @@ function OrderCard({ order, onStatusChange, onAccept, onDecline, onAssignDriver,
       // Items
       order.items && order.items.length > 0 && React.createElement("div", { style: { background: "#fff", borderRadius: 12, padding: "10px 12px", marginBottom: 12, border: "1px solid #EAECF2" } },
         order.items.map((item, i) =>
-          React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: i < order.items.length-1 ? "1px solid #F3F4F6" : "none", fontSize: 13 } },
-            React.createElement("span", { style: { color: "#374151", fontWeight: 500 } }, (item.emoji||"") + " " + item.name + " ×" + item.qty),
-            React.createElement("span", { style: { color: "#E60000", fontWeight: 700 } }, "SR " + (item.price * item.qty).toFixed(2))
+          React.createElement("div", { key: i, style: { padding: "6px 0", borderBottom: i < order.items.length-1 ? "1px solid #F3F4F6" : "none", fontSize: 13 } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between" } },
+              React.createElement("span", { style: { color: "#374151", fontWeight: 500 } }, (item.emoji||"") + " " + item.name + " ×" + item.qty),
+              React.createElement("span", { style: { color: "#E60000", fontWeight: 700 } }, "SR " + (item.price * item.qty).toFixed(2))
+            ),
+            item.note && React.createElement("div", { style: { marginTop: 4, padding: "6px 10px", background: "#FEF9C3", border: "1px solid #FDE68A", borderRadius: 8, color: "#854D0E", fontSize: 12, fontWeight: 700, fontStyle: "italic" } },
+              "📝 " + item.note
+            )
           )
         )
       ),
@@ -3614,6 +3619,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
           lines.push(pad(name.substring(0, W - price.length - 1), price) + LF);
           if (C.showItemArabic && item.nameAr) lines.push("  " + item.nameAr + LF);
           lines.push("  x" + (item.qty || 1) + LF);
+          if (item.note) lines.push(BOLD_ON + "  >> " + item.note + BOLD_OFF + LF);
         });
         lines.push(line("-"));
         if (C.showSubtotalBreakdown) {
@@ -3677,7 +3683,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var itemRows = (order.items || []).map(function(it){
         var line = (it.emoji || "") + " " + (it.name || "") + (C.showItemArabic && it.nameAr ? " / " + it.nameAr : "");
         var right = "SR " + ((it.price || 0) * (it.qty || 1)).toFixed(2);
-        return "<tr><td class='n'>" + esc(line) + "<div class='q'>x" + (it.qty || 1) + "</div></td><td class='p'>" + esc(right) + "</td></tr>";
+        var noteHTML = it.note ? "<div class='q' style='font-weight:800;color:#B45309;font-style:italic'>&gt;&gt; " + esc(it.note) + "</div>" : "";
+        return "<tr><td class='n'>" + esc(line) + "<div class='q'>x" + (it.qty || 1) + "</div>" + noteHTML + "</td><td class='p'>" + esc(right) + "</td></tr>";
       }).join("");
 
       var contactHTML = (C.showBranchPhones ? (C.contactLines || []).filter(Boolean).map(function(l){ return "<div>" + esc(l) + "</div>"; }).join("") : "");
