@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.12.0";
+const APP_VERSION = "8.13.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -124,7 +124,7 @@ function StatCard({ icon, label, value, color, sublabel, trend }) {
 }
 
 // ── ORDER CARD ──
-function OrderCard({ order, onStatusChange, onAccept, onDecline, onAssignDriver, onOverride, isNew }) {
+function OrderCard({ order, onStatusChange, onAccept, onDecline, onAssignDriver, onOverride, onRefund, isNew }) {
   const [expanded, setExpanded] = React.useState(isNew || false);
   const [driverInput, setDriverInput] = React.useState(order.driverName || "");
   const [driverPhone, setDriverPhone] = React.useState(order.driverPhone || "");
@@ -308,9 +308,12 @@ function OrderCard({ order, onStatusChange, onAccept, onDecline, onAssignDriver,
           style: { flex: 1, padding: "11px", fontSize: 13 }
         }, "🏁 Complete"),
         // Refund is reachable only from a completed order — an explicit,
-        // owner-driven reversal that pushes a refund notification to the customer.
-        (_s === "completed") && React.createElement("button", {
-          onClick: () => { if (window.confirm("Mark order #" + order.orderNo + " as refunded? The customer is notified.")) onStatusChange(order.orderNo, "refunded"); },
+        // owner-driven reversal that pushes a refund notification to the
+        // customer. Phase 5 routes it through the refundOrder callable so a
+        // refund block (amount + reason + owner uid) is stored alongside the
+        // status change, letting reports split refunds from plain cancels.
+        (_s === "completed") && onRefund && React.createElement("button", {
+          onClick: () => onRefund(order),
           style: { flex: 1, padding: "11px", fontSize: 13, background: "#FAF5FF", border: "1px solid #E9D5FF", color: "#9333EA", borderRadius: 12, cursor: "pointer", fontWeight: 700 }
         }, "↩️ Refund"),
         !isTerminal && onOverride && React.createElement("button", {
@@ -3263,8 +3266,10 @@ function App() {
     if (reason === null) return; // Cancel pressed
     setOrders(p => p.map(o => o.orderNo === order.orderNo ? {...o, status: "cancelled", declineReason: reason} : o));
     if (order.fbId && window.FB) {
-      try { await window.FB.updateOrderStatus(order.fbId, "cancelled"); } catch(_) {}
-      try { if (window.FB.updateOrderField) await window.FB.updateOrderField(order.fbId, "declineReason", reason || ""); } catch(_) {}
+      // Route through the callable so the reason lands in statusHistory AND
+      // as top-level `declineReason` (the callable stamps both when
+      // status=cancelled + reason present).
+      try { await window.FB.updateOrderStatus(order.fbId, "cancelled", reason || ""); } catch(_) {}
       // Push a matching customer-inbox notification.
       if (order.userPhone && window.FB.sendNotification) {
         try { await window.FB.sendNotification(order.userPhone, {
@@ -3302,6 +3307,34 @@ function App() {
         orderId: order.fbId, orderNo: order.orderNo, status: "delivering", kind: "delivery",
       }); } catch(_) {}
     }
+  };
+
+  // Owner-only refund. Prompts for a reason, routes through the refundOrder
+  // callable so the server stamps the refund block (amount + reason + owner
+  // uid) alongside the transition to `refunded`. Falls back to the status
+  // callable if the refund callable is not deployed yet.
+  const handleRefundOrder = async (order) => {
+    if (!order || !order.fbId) return;
+    const reason = window.prompt("Reason for refunding order #" + order.orderNo + " (shown in reports):", "");
+    if (reason === null) return;
+    setOrders(p => p.map(o => o.orderNo === order.orderNo ? { ...o, status: "refunded" } : o));
+    let ok = false;
+    if (window.FB && window.FB.refundOrder) {
+      const res = await window.FB.refundOrder(order.fbId, reason);
+      ok = !!(res && res.ok);
+    }
+    if (!ok && window.FB && window.FB.updateOrderStatus) {
+      ok = await window.FB.updateOrderStatus(order.fbId, "refunded", reason);
+    }
+    if (ok && order.userPhone && window.FB && window.FB.sendNotification) {
+      try { await window.FB.sendNotification(order.userPhone, {
+        title: "Refund issued", titleAr: "تم إصدار الاسترجاع",
+        body: "Order #" + order.orderNo + " was refunded." + (reason ? " " + reason : ""),
+        bodyAr: "تم استرجاع طلبك #" + order.orderNo + "." + (reason ? " " + reason : ""),
+        orderId: order.fbId, orderNo: order.orderNo, status: "refunded",
+      }); } catch(_) {}
+    }
+    if (!ok) alert("Refund failed. Check your connection and try again.");
   };
 
   const handleOverride = async (order, amount, reason) => {
@@ -3608,7 +3641,7 @@ function App() {
                   React.createElement("div", { style: { color: "#6B7280", fontSize: 14, fontWeight: 500 } }, orderFilter === "all" ? "No orders " + rangeLabel : "No " + orderFilter + " orders " + rangeLabel),
                   React.createElement("div", { style: { color: "#9CA3AF", fontSize: 12, marginTop: 6 } }, "Orders appear here in real time")
                 )
-              : filteredOrders.map(o => React.createElement(OrderCard, { key: o.fbId || o.orderNo, order: o, onStatusChange: handleStatusChange, onAccept: handleAcceptOrder, onDecline: handleDeclineOrder, onAssignDriver: handleAssignDriver, onOverride: isOwner ? handleOverride : undefined, isNew: o.status === "new" || o.status === "pending" }))
+              : filteredOrders.map(o => React.createElement(OrderCard, { key: o.fbId || o.orderNo, order: o, onStatusChange: handleStatusChange, onAccept: handleAcceptOrder, onDecline: handleDeclineOrder, onAssignDriver: handleAssignDriver, onOverride: isOwner ? handleOverride : undefined, onRefund: isOwner ? handleRefundOrder : undefined, isNew: o.status === "new" || o.status === "pending" }))
           );
         })()
       ),
@@ -3731,7 +3764,27 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         getSettings: async function(){ try{ var s=await getDoc(doc(_db,"settings","restaurant")); return s.exists()?s.data():{isOpen:true}; }catch(e){ return {isOpen:true}; } },
         saveSettings: async function(d){ try{ await setDoc(doc(_db,"settings","restaurant"),Object.assign({},d,{updatedAt:serverTimestamp()})); return true; }catch(e){ window.__fbErr("settings",e); return false; } },
         saveOrder: async function(o){ try{ await addDoc(collection(_db,"orders"),Object.assign({},o,{createdAt:serverTimestamp(),status:"new"})); return true; }catch(e){ window.__fbErr("order",e); return false; } },
-        updateOrderStatus: async function(id,s){ try{ await updateDoc(doc(_db,"orders",id),{status:s,updatedAt:serverTimestamp()}); return true; }catch(e){ window.__fbErr("order status",e); return false; } },
+        // Phase 5: status changes route through the updateOrderStatus callable
+        // so the fixed transition table + statusHistory audit trail apply.
+        // Direct client writes to `status` / `statusHistory` are blocked by
+        // firestore.rules — this callable is now the only working path.
+        updateOrderStatus: async function(id, s, reason){
+          try {
+            var call = httpsCallable(_fns, "updateOrderStatus");
+            var res = await call({ orderId: id, status: s, reason: reason || undefined });
+            return !!(res && res.data && res.data.ok);
+          } catch(e) { window.__fbErr("order status", e); return false; }
+        },
+        // Owner-only refund. Marks the order refunded, stores the refund block
+        // (amount + reason + who) so reports can separate refunds from plain
+        // cancellations. Amount defaults to the order total on the server side.
+        refundOrder: async function(id, reason, amount){
+          try {
+            var call = httpsCallable(_fns, "refundOrder");
+            var res = await call({ orderId: id, reason: reason || undefined, amount: (amount != null ? Number(amount) : undefined) });
+            return { ok: !!(res && res.data && res.data.ok), data: (res && res.data) || null };
+          } catch(e) { window.__fbErr("refund order", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
+        },
         updateOrderField: async function(id, field, value){ try{ var patch={}; patch[field]=value; patch.updatedAt=serverTimestamp(); await updateDoc(doc(_db,"orders",id), patch); return true; }catch(e){ window.__fbErr("order field",e); return false; } },
         updateOrderFields: async function(id, patch){ try{ await updateDoc(doc(_db,"orders",id), Object.assign({}, patch, { updatedAt: serverTimestamp() })); return true; }catch(e){ window.__fbErr("order fields",e); return false; } },
         getAnnouncement: async function(){ try{ var s=await getDoc(doc(_db,"settings","announcement")); return s.exists()?s.data():null; }catch(e){ return null; } },
