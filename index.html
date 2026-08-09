@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.10.1";
+const APP_VERSION = "8.11.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -1549,6 +1549,195 @@ function OwnerHome({ orders, branches, onOpenBranch }) {
   );
 }
 
+// ── BRANCHES TAB (Phase 4) ──
+// Owner-only CRUD for the branches collection. List → click a row to edit,
+// hit "+ Add branch" to create. saveBranch/deleteBranch are on window.FB.
+function BranchesTabNew({ branches }) {
+  const emptyDraft = React.useCallback(() => ({
+    id: "", nameEn: "", nameAr: "", phone: "", whatsapp: "", address: "",
+    lat: "", lng: "", active: true,
+    hours: { open: "", close: "" },
+    prepMinutesPickup: 15, prepMinutesDelivery: 30,
+  }), []);
+  const [selected, setSelected] = React.useState(null); // branch id being edited, or "__new" for new
+  const [draft, setDraft] = React.useState(emptyDraft);
+  const [saving, setSaving] = React.useState(false);
+  const [err, setErr] = React.useState("");
+
+  const startEdit = (b) => {
+    setErr("");
+    setSelected(b.id);
+    setDraft({
+      id: b.id,
+      nameEn: b.nameEn || b.name || "",
+      nameAr: b.nameAr || "",
+      phone: b.phone || "",
+      whatsapp: b.whatsapp || "",
+      address: b.address || "",
+      lat: b.lat != null ? String(b.lat) : "",
+      lng: b.lng != null ? String(b.lng) : "",
+      active: b.active !== false,
+      hours: { open: (b.hours && b.hours.open) || "", close: (b.hours && b.hours.close) || "" },
+      prepMinutesPickup: b.prepMinutesPickup != null ? b.prepMinutesPickup : 15,
+      prepMinutesDelivery: b.prepMinutesDelivery != null ? b.prepMinutesDelivery : 30,
+    });
+  };
+  const startNew = () => {
+    setErr("");
+    setSelected("__new");
+    setDraft(emptyDraft());
+  };
+  const cancel = () => { setSelected(null); setDraft(emptyDraft()); setErr(""); };
+
+  const save = async () => {
+    setErr("");
+    if (!draft.id) return setErr("ID is required (lowercase, no spaces)");
+    if (!/^[a-z0-9-]{2,30}$/.test(draft.id)) return setErr("ID must be 2-30 chars, lowercase letters/digits/hyphens only");
+    if (!draft.nameEn.trim()) return setErr("English name is required");
+    if (!draft.nameAr.trim()) return setErr("Arabic name is required");
+    setSaving(true);
+    const ok = await window.FB.saveBranch(draft);
+    setSaving(false);
+    if (ok) cancel();
+    else setErr("Save failed — check browser console for details.");
+  };
+
+  const remove = async (id) => {
+    if (!confirm("Delete branch \"" + id + "\"? This cannot be undone.\n(Orders keep their branch id — the label just stops matching.)")) return;
+    const ok = await window.FB.deleteBranch(id);
+    if (ok && selected === id) cancel();
+    else if (!ok) alert("Delete failed — check browser console for details.");
+  };
+
+  // ── styles ────────────────────────────────────────────────────
+  const card = { background: "#fff", borderRadius: 14, border: "1px solid #EAECF2", padding: 16, marginBottom: 12, boxShadow: "0 1px 4px rgba(16,24,40,0.04)" };
+  const label = { display: "block", fontSize: 11, color: "#6B7280", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 6 };
+  const input = { width: "100%", padding: "9px 12px", border: "1px solid #E5E7EB", borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box" };
+  const row2 = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 };
+  const btnPrimary = { padding: "10px 18px", background: "#E60000", color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer" };
+  const btnGhost = { padding: "10px 14px", background: "#F1F5F9", color: "#334155", border: "1px solid #E5E7EB", borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: "pointer" };
+  const btnDanger = { padding: "6px 10px", background: "#FEF2F2", color: "#B91C1C", border: "1px solid #FECACA", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer" };
+
+  const editorOpen = selected != null;
+  const editingExisting = editorOpen && selected !== "__new";
+
+  return React.createElement("div", null,
+    React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } },
+      React.createElement("div", null,
+        React.createElement("div", { style: { fontSize: 18, fontWeight: 800, color: "#1A1D27" } }, "Branches"),
+        React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, branches.length + " branch" + (branches.length === 1 ? "" : "es") + " · " + branches.filter(b => b.active !== false).length + " active"),
+      ),
+      !editorOpen && React.createElement("button", { onClick: startNew, style: btnPrimary }, "+ Add branch"),
+    ),
+
+    // ── editor ────────────────────────────────────────
+    editorOpen && React.createElement("div", { style: card },
+      React.createElement("div", { style: { fontWeight: 800, fontSize: 15, color: "#1A1D27", marginBottom: 14 } },
+        editingExisting ? ("Editing " + draft.nameEn) : "New branch",
+      ),
+      React.createElement("div", { style: row2 },
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "Branch ID"),
+          React.createElement("input", {
+            style: Object.assign({}, input, editingExisting ? { background: "#F9FAFB", color: "#6B7280" } : {}),
+            value: draft.id, disabled: editingExisting,
+            onChange: (e) => setDraft(Object.assign({}, draft, { id: e.target.value.toLowerCase().replace(/\s+/g, "") })),
+            placeholder: "e.g. kakkiyah",
+          }),
+        ),
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "Active"),
+          React.createElement("label", { style: { display: "inline-flex", alignItems: "center", gap: 8, paddingTop: 8 } },
+            React.createElement("input", { type: "checkbox", checked: draft.active, onChange: (e) => setDraft(Object.assign({}, draft, { active: e.target.checked })) }),
+            React.createElement("span", { style: { fontSize: 13, color: "#334155" } }, draft.active ? "Visible to customers" : "Hidden from customers"),
+          ),
+        ),
+      ),
+      React.createElement("div", { style: row2 },
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "Name (English)"),
+          React.createElement("input", { style: input, value: draft.nameEn, onChange: (e) => setDraft(Object.assign({}, draft, { nameEn: e.target.value })), placeholder: "Broast Al Bahr (Kakkiyah)" }),
+        ),
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "Name (Arabic)"),
+          React.createElement("input", { style: Object.assign({}, input, { direction: "rtl" }), value: draft.nameAr, onChange: (e) => setDraft(Object.assign({}, draft, { nameAr: e.target.value })), placeholder: "بروست البحر (فرع الكعكية)" }),
+        ),
+      ),
+      React.createElement("div", { style: row2 },
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "Phone (call)"),
+          React.createElement("input", { style: input, value: draft.phone, onChange: (e) => setDraft(Object.assign({}, draft, { phone: e.target.value })), placeholder: "0500959394" }),
+        ),
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "WhatsApp (with country code)"),
+          React.createElement("input", { style: input, value: draft.whatsapp, onChange: (e) => setDraft(Object.assign({}, draft, { whatsapp: e.target.value })), placeholder: "966500959394" }),
+        ),
+      ),
+      React.createElement("div", { style: { marginBottom: 12 } },
+        React.createElement("label", { style: label }, "Address"),
+        React.createElement("input", { style: input, value: draft.address, onChange: (e) => setDraft(Object.assign({}, draft, { address: e.target.value })), placeholder: "Street, neighborhood, city" }),
+      ),
+      React.createElement("div", { style: row2 },
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "Latitude"),
+          React.createElement("input", { style: input, type: "number", step: "any", value: draft.lat, onChange: (e) => setDraft(Object.assign({}, draft, { lat: e.target.value })), placeholder: "21.3765717" }),
+        ),
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "Longitude"),
+          React.createElement("input", { style: input, type: "number", step: "any", value: draft.lng, onChange: (e) => setDraft(Object.assign({}, draft, { lng: e.target.value })), placeholder: "39.8037236" }),
+        ),
+      ),
+      React.createElement("div", { style: row2 },
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "Hours — Open"),
+          React.createElement("input", { style: input, value: draft.hours.open, onChange: (e) => setDraft(Object.assign({}, draft, { hours: Object.assign({}, draft.hours, { open: e.target.value }) })), placeholder: "11:00" }),
+        ),
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "Hours — Close"),
+          React.createElement("input", { style: input, value: draft.hours.close, onChange: (e) => setDraft(Object.assign({}, draft, { hours: Object.assign({}, draft.hours, { close: e.target.value }) })), placeholder: "01:00" }),
+        ),
+      ),
+      React.createElement("div", { style: row2 },
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "Prep minutes — Pickup"),
+          React.createElement("input", { style: input, type: "number", min: 1, max: 240, value: draft.prepMinutesPickup, onChange: (e) => setDraft(Object.assign({}, draft, { prepMinutesPickup: Number(e.target.value) || 0 })) }),
+        ),
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "Prep minutes — Delivery"),
+          React.createElement("input", { style: input, type: "number", min: 1, max: 240, value: draft.prepMinutesDelivery, onChange: (e) => setDraft(Object.assign({}, draft, { prepMinutesDelivery: Number(e.target.value) || 0 })) }),
+        ),
+      ),
+      err && React.createElement("div", { style: { padding: "10px 12px", background: "#FEF2F2", border: "1px solid #FECACA", color: "#B91C1C", borderRadius: 10, fontSize: 13, marginBottom: 12 } }, err),
+      React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end" } },
+        React.createElement("button", { style: btnGhost, onClick: cancel, disabled: saving }, "Cancel"),
+        React.createElement("button", { style: Object.assign({}, btnPrimary, saving ? { opacity: 0.6, cursor: "wait" } : {}), onClick: save, disabled: saving }, saving ? "Saving…" : (editingExisting ? "Save changes" : "Create branch")),
+      ),
+    ),
+
+    // ── list ──────────────────────────────────────────
+    branches.length === 0
+      ? React.createElement("div", { style: Object.assign({}, card, { textAlign: "center", color: "#6B7280" }) }, "No branches yet — tap “+ Add branch” to create the first one.")
+      : branches.map((b) => React.createElement("div", { key: b.id, style: Object.assign({}, card, b.active === false ? { opacity: 0.55 } : {}) },
+          React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 } },
+            React.createElement("div", null,
+              React.createElement("div", { style: { fontSize: 15, fontWeight: 800, color: "#1A1D27" } }, (b.nameEn || b.name || b.id) + (b.active === false ? " · disabled" : "")),
+              React.createElement("div", { style: { fontSize: 13, color: "#6B7280", direction: "rtl", textAlign: "right", marginTop: 2 } }, b.nameAr || ""),
+              React.createElement("div", { style: { fontSize: 11, color: "#94A3B8", marginTop: 4 } },
+                "ID: " + b.id + (b.phone ? " · " + b.phone : "") + (b.address ? " · " + b.address : ""),
+              ),
+              (b.prepMinutesPickup != null || b.prepMinutesDelivery != null) && React.createElement("div", { style: { fontSize: 11, color: "#64748B", marginTop: 4 } },
+                "Prep: " + (b.prepMinutesPickup || "?") + " min pickup · " + (b.prepMinutesDelivery || "?") + " min delivery",
+              ),
+            ),
+            React.createElement("div", { style: { display: "flex", gap: 8, flexShrink: 0 } },
+              React.createElement("button", { onClick: () => startEdit(b), style: Object.assign({}, btnGhost, { padding: "6px 12px", fontSize: 12 }) }, "Edit"),
+              React.createElement("button", { onClick: () => remove(b.id), style: btnDanger }, "Delete"),
+            ),
+          ),
+        )),
+  );
+}
+
 // ── CUSTOMERS TAB ──
 function CustomersTabNew({ customers, orders }) {
   const [search, setSearch] = React.useState("");
@@ -2776,11 +2965,39 @@ function App() {
     } catch(_) {}
   }
   const ADMIN_PASSWORD = "albahr2024";
-  const BRANCHES = [
-    { id: "kakkiyah", name: "Kakkiyah", nameAr: "الكعكية", phone: "0500959394" },
-    { id: "subhani", name: "Subhani", nameAr: "الصبحاني", phone: "0508379339" },
-    { id: "waliy", name: "Waliy Al Ahd", nameAr: "ولي العهد", phone: "0550061771" },
+  // Phase 4: branches now live in Firestore. This static list is only the
+  // first-paint fallback; the useEffect below subscribes to the live
+  // collection and replaces it as soon as data arrives.
+  const FALLBACK_BRANCHES = [
+    { id: "kakkiyah", name: "Kakkiyah", nameEn: "Kakkiyah", nameAr: "الكعكية", phone: "0500959394", active: true },
+    { id: "subhani", name: "Subhani", nameEn: "Subhani", nameAr: "الصبحاني", phone: "0508379339", active: true },
+    { id: "waliy", name: "Waliy Al Ahd", nameEn: "Waliy Al Ahd", nameAr: "ولي العهد", phone: "0550061771", active: true },
   ];
+  const [branchList, setBranchList] = React.useState(FALLBACK_BRANCHES);
+  // Normalize each Firestore branch doc into the shape older admin code
+  // expects ({name, phone}) while also carrying every new Phase-4 field.
+  const normalizeBranch = React.useCallback((b) => Object.assign({}, b, {
+    name: b.nameEn || b.name || b.id,
+    nameEn: b.nameEn || b.name || b.id,
+    nameAr: b.nameAr || "",
+    phone: b.phone || b.whatsapp || "",
+    active: b.active !== false,
+  }), []);
+  React.useEffect(() => {
+    if (!loggedIn) return;
+    const attach = () => {
+      if (!window.FB || !window.FB.onBranchesChange) { setTimeout(attach, 400); return; }
+      return window.FB.onBranchesChange((bs) => {
+        if (!bs || !bs.length) return;
+        setBranchList(bs.map(normalizeBranch));
+      });
+    };
+    const unsub = attach();
+    return () => { try { unsub && unsub(); } catch(_){} };
+  }, [loggedIn, normalizeBranch]);
+  // BRANCHES kept as an alias so downstream code keeps compiling; hides
+  // inactive rows from every non-Branches-tab usage.
+  const BRANCHES = React.useMemo(() => branchList.filter(b => b.active !== false), [branchList]);
   const [selectedBranch, setSelectedBranch] = React.useState(null);
 
   // Auto-pin branch manager to their branch; default owner to "all"
@@ -3104,6 +3321,7 @@ function App() {
     { id: "offers", icon: "🎁", label: "Offers", ownerOnly: true },
     { id: "coupons", icon: "🎟️", label: "Coupons", ownerOnly: true },
     { id: "customers", icon: "👥", label: "Customers" },
+    { id: "branches", icon: "🏪", label: "Branches", ownerOnly: true },
     { id: "settings", icon: "⚙️", label: "Settings" },
   ];
   const tabs = allTabs.filter(t => isOwner || !t.ownerOnly);
@@ -3367,6 +3585,7 @@ function App() {
       tab === "offers" && isOwner && React.createElement(OffersTabNew, null),
       tab === "coupons" && isOwner && React.createElement(CouponsTabNew, null),
       tab === "customers" && React.createElement(CustomersTabNew, { customers: customers, orders: orders }),
+      tab === "branches" && isOwner && React.createElement(BranchesTabNew, { branches: branchList }),
       tab === "settings" && React.createElement(SettingsTabNew, { isOwner: isOwner, branches: BRANCHES, branchScope: branchScope, doLogout: doLogout, authEmail: authUser && authUser.email })
     ),
 
@@ -3468,6 +3687,38 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         getAnnouncement: async function(){ try{ var s=await getDoc(doc(_db,"settings","announcement")); return s.exists()?s.data():null; }catch(e){ return null; } },
         saveAnnouncement: async function(d){ try{ await setDoc(doc(_db,"settings","announcement"), Object.assign({}, d, { updatedAt: serverTimestamp() })); return true; }catch(e){ window.__fbErr("announcement",e); return false; } },
         onAnnouncementChange: function(cb){ return onSnapshot(doc(_db,"settings","announcement"), function(s){ cb(s.exists() ? s.data() : null); }); },
+        // ── Phase 4: branches CRUD ────────────────────────────────────
+        // Live list of every branch doc; feeds the Branches tab + the
+        // top-level branch picker so a newly-added branch shows up without
+        // a page reload.
+        onBranchesChange: function(cb){ return onSnapshot(collection(_db,"branches"), function(s){ cb(s.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); })); }); },
+        getBranches: async function(){ try{ var snap=await getDocs(collection(_db,"branches")); return snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); }); }catch(e){ return []; } },
+        // Validated write mirroring src/lib/schema.ts validateBranch. Empty
+        // name fields are the only hard-error case (rules enforce the same);
+        // everything else is optional and trimmed / clamped.
+        saveBranch: async function(b){
+          if (!b || !b.id) { window.__fbErr("branch","missing id"); return false; }
+          var nameEn = String(b.nameEn||"").trim(), nameAr = String(b.nameAr||"").trim();
+          if (!nameEn || !nameAr) { window.__fbErr("branch","nameEn + nameAr required"); return false; }
+          var payload = {
+            id: String(b.id).trim().slice(0,40),
+            nameEn: nameEn.slice(0,80),
+            nameAr: nameAr.slice(0,80),
+            active: b.active !== false,
+            updatedAt: serverTimestamp(),
+          };
+          if (b.phone)      payload.phone      = String(b.phone).trim().slice(0,20);
+          if (b.whatsapp)   payload.whatsapp   = String(b.whatsapp).trim().slice(0,20);
+          if (b.address)    payload.address    = String(b.address).trim().slice(0,500);
+          if (b.lat != null && !isNaN(Number(b.lat))) payload.lat = Number(b.lat);
+          if (b.lng != null && !isNaN(Number(b.lng))) payload.lng = Number(b.lng);
+          if (b.hours && (b.hours.open || b.hours.close)) payload.hours = { open: String(b.hours.open||"").slice(0,8), close: String(b.hours.close||"").slice(0,8) };
+          if (b.prepMinutesPickup != null && !isNaN(Number(b.prepMinutesPickup)))     payload.prepMinutesPickup = Math.max(1, Math.min(240, Math.round(Number(b.prepMinutesPickup))));
+          if (b.prepMinutesDelivery != null && !isNaN(Number(b.prepMinutesDelivery))) payload.prepMinutesDelivery = Math.max(1, Math.min(240, Math.round(Number(b.prepMinutesDelivery))));
+          try{ await setDoc(doc(_db,"branches", payload.id), payload, { merge: true }); return true; }
+          catch(e){ window.__fbErr("branch",e); return false; }
+        },
+        deleteBranch: async function(id){ try{ await deleteDoc(doc(_db,"branches", String(id))); return true; }catch(e){ window.__fbErr("branch",e); return false; } },
         getTenant: async function(){ try{ var s=await getDoc(doc(_db,"settings","tenant")); return s.exists()?s.data():null; }catch(e){ return null; } },
         saveTenant: async function(d){ try{ await setDoc(doc(_db,"settings","tenant"), Object.assign({}, d, { updatedAt: serverTimestamp() }), { merge: true }); return true; }catch(e){ window.__fbErr("tenant",e); return false; } },
         onTenantChange: function(cb){ return onSnapshot(doc(_db,"settings","tenant"), function(s){ cb(s.exists() ? s.data() : null); }); },
