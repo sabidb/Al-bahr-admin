@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.8.2";
+const APP_VERSION = "8.9.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -3584,7 +3584,15 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       promoLine: "",
       paperWidth: 32,              // 32 for 58mm, 42 for 72mm, 48 for 80mm
       feedLines: 3,
-      autoCut: true
+      autoCut: true,
+      // Ready-by = createdAt + prepMinutes. Configurable per-branch via
+      // settings/invoiceConfig.byBranch.<id>.prepMinutesPickup / .prepMinutesDelivery.
+      prepMinutesPickup: 15,
+      prepMinutesDelivery: 30,
+      showReadyBy: true,
+      showLoyaltyBalance: true,     // print the customer's running points balance
+      showStatus: true,             // include current order status (useful on reprints)
+      showBranchContact: true       // print branch name + branch phone up top
     };
     var INVOICE_CFG = { global: {}, byBranch: {} };
     function resolveConfig(branchId) {
@@ -3631,12 +3639,24 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       function line(ch) { return ch.repeat(W) + LF; }
       function pad(l, r) { var g = W - l.length - r.length; if (g < 1) g = 1; return l + " ".repeat(g) + r; }
 
-      var date = new Date();
-      var timeStr = date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-      var dateStr = date.toLocaleDateString("en-GB");
+      // Prefer the order's original createdAt so a reprint shows when the
+      // customer actually placed the order, not when the paper came out.
+      var orderTs = null;
+      if (order.createdAt && typeof order.createdAt.toDate === "function") orderTs = order.createdAt.toDate();
+      else if (order.date) { var t = new Date(order.date); if (!isNaN(t.getTime())) orderTs = t; }
+      if (!orderTs) orderTs = new Date();
+      var timeStr = orderTs.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      var dateStr = orderTs.toLocaleDateString("en-GB");
+
+      var prepMin = order.orderType === "delivery"
+        ? Number(C.prepMinutesDelivery) || 30
+        : Number(C.prepMinutesPickup) || 15;
+      var readyTs = new Date(orderTs.getTime() + prepMin * 60000);
+      var readyStr = readyTs.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 
       var branchMap = { kakkiyah: "Kakkiyah", subhani: "Subhani", waliy: "Waliy Al Ahd" };
-      var branchName = branchMap[order.branch] || order.branch || "";
+      var branchName = branchMap[order.branch] || (order.branchObj && (order.branchObj.nameEn || order.branchObj.id)) || order.branch || "";
+      var branchPhone = (order.branchObj && order.branchObj.phone) || "";
 
       var total = Number(order.total) || 0;
       var pts;
@@ -3663,10 +3683,18 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       if (C.showBranchName && branchName) lines.push(CENTER + stripEmoji(branchName + (C.branchSuffix || "")) + LF);
       lines.push(LEFT + line("="));
 
+      // Header contact — printed near the top so the kitchen line can call
+      // the ordering branch without hunting.
+      if (C.showBranchContact && branchPhone) {
+        lines.push(CENTER + "Tel " + stripEmoji(branchPhone) + LF);
+      }
+
       // Order details
       if (C.showOrderNo) lines.push(BOLD_ON + "Order:" + BOLD_OFF + "  #" + stripEmoji(order.orderNo) + LF);
       if (C.showType) lines.push(BOLD_ON + "Type:" + BOLD_OFF + "   " + (order.orderType === "pickup" ? "Pickup" : "Delivery") + LF);
-      if (C.showDate) lines.push(BOLD_ON + "Date:" + BOLD_OFF + "   " + dateStr + " " + timeStr + LF);
+      if (C.showStatus && order.status) lines.push(BOLD_ON + "Status:" + BOLD_OFF + " " + stripEmoji(order.status) + LF);
+      if (C.showDate) lines.push(BOLD_ON + "Placed:" + BOLD_OFF + " " + dateStr + " " + timeStr + LF);
+      if (C.showReadyBy) lines.push(BOLD_ON + "Ready:" + BOLD_OFF + "  " + readyStr + " (~" + prepMin + " min)" + LF);
       if (order.pickupTime) lines.push(BOLD_ON + "Pickup:" + BOLD_OFF + " " + stripEmoji(order.pickupTime) + LF);
       lines.push(LEFT + line("-"));
 
@@ -3713,10 +3741,13 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         lines.push(LEFT + line("-"));
       }
 
-      // Loyalty
+      // Loyalty — earned this order + total running balance from the customer doc.
       if (C.showLoyalty) {
         lines.push(CENTER + BOLD_ON + stripEmoji(C.loyaltyLabel || "Loyalty Points") + BOLD_OFF + LF);
         lines.push(CENTER + "Earned this order: +" + pts + " pts" + LF);
+        if (C.showLoyaltyBalance && order.loyaltyBalance != null) {
+          lines.push(CENTER + "Total balance: " + Number(order.loyaltyBalance) + " pts" + LF);
+        }
         lines.push(LEFT + line("-"));
       }
 
@@ -3754,9 +3785,15 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     function buildReceiptHTML(order) {
       var C = resolveConfig(order.branch);
       var branchMap = { kakkiyah: "Kakkiyah", subhani: "Subhani", waliy: "Waliy Al Ahd" };
-      var branchName = branchMap[order.branch] || order.branch || "";
-      var d = new Date();
+      var branchName = branchMap[order.branch] || (order.branchObj && (order.branchObj.nameEn || order.branchObj.id)) || order.branch || "";
+      var branchPhone = (order.branchObj && order.branchObj.phone) || "";
+      var d = null;
+      if (order.createdAt && typeof order.createdAt.toDate === "function") d = order.createdAt.toDate();
+      else if (order.date) { var _t = new Date(order.date); if (!isNaN(_t.getTime())) d = _t; }
+      if (!d) d = new Date();
       var when = d.toLocaleDateString("en-GB") + " " + d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      var prepMin = order.orderType === "delivery" ? Number(C.prepMinutesDelivery) || 30 : Number(C.prepMinutesPickup) || 15;
+      var readyBy = new Date(d.getTime() + prepMin * 60000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
       var total = Number(order.total) || 0;
       var pts = total >= 500 ? 35 : total >= 250 ? 20 : total >= 100 ? 10 : 5;
       function esc(s){ return stripEmoji(String(s == null ? "" : s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
@@ -3785,10 +3822,13 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
           "<div class='c b big'>" + esc((C.header || "").toUpperCase()) + "</div>" +
           (C.tagline ? "<div class='c sm'>" + esc(C.tagline) + "</div>" : "") +
           (C.showBranchName && branchName ? "<div class='c'>" + esc(branchName + (C.branchSuffix || "")) + "</div>" : "") +
+          (C.showBranchContact && branchPhone ? "<div class='c sm'>Tel " + esc(branchPhone) + "</div>" : "") +
           "<hr class='dbl'/>" +
           (C.showOrderNo ? "<div class='row'><span class='b'>Order</span><span>#" + esc(order.orderNo) + "</span></div>" : "") +
           (C.showType ? "<div class='row'><span class='b'>Type</span><span>" + esc(order.orderType === "pickup" ? "Pickup" : "Delivery") + "</span></div>" : "") +
-          (C.showDate ? "<div class='row'><span class='b'>Date</span><span>" + esc(when) + "</span></div>" : "") +
+          (C.showStatus && order.status ? "<div class='row'><span class='b'>Status</span><span>" + esc(order.status) + "</span></div>" : "") +
+          (C.showDate ? "<div class='row'><span class='b'>Placed</span><span>" + esc(when) + "</span></div>" : "") +
+          (C.showReadyBy ? "<div class='row'><span class='b'>Ready</span><span>" + esc(readyBy) + " (~" + prepMin + " min)</span></div>" : "") +
           (order.pickupTime ? "<div class='row'><span class='b'>Pickup</span><span>" + esc(order.pickupTime) + "</span></div>" : "") +
           "<hr/>" +
           (C.showCustomer ? "<div class='b'>Customer</div>" +
@@ -3806,7 +3846,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
             "<div class='row b big'><span>TOTAL</span><span>SR " + total.toFixed(2) + "</span></div>" +
             "<div class='c sm'>(Prices incl. 15% VAT: SR " + (order.vat || Math.round(total / 1.15 * 0.15 * 100) / 100).toFixed(2) + ")</div><hr class='dbl'/>" : "") +
           (order.note ? "<div><span class='b'>Note:</span> " + esc(order.note) + "</div><hr/>" : "") +
-          (C.showLoyalty ? "<div class='c b'>" + esc(C.loyaltyLabel || "Loyalty Points") + "</div><div class='c'>Earned this order: +" + pts + " pts</div><hr/>" : "") +
+          (C.showLoyalty ? "<div class='c b'>" + esc(C.loyaltyLabel || "Loyalty Points") + "</div><div class='c'>Earned this order: +" + pts + " pts</div>" +
+            (C.showLoyaltyBalance && order.loyaltyBalance != null ? "<div class='c'>Total balance: " + Number(order.loyaltyBalance) + " pts</div>" : "") +
+            "<hr/>" : "") +
           ((C.showTaxNumber && C.taxNumber) ? "<div class='row'><span class='b'>Tax#</span><span>" + esc(C.taxNumber) + "</span></div>" : "") +
           ((C.showVatNumber && C.vatNumber) ? "<div class='row'><span class='b'>VAT#</span><span>" + esc(C.vatNumber) + "</span></div>" : "") +
           (contactHTML ? "<div class='c b' style='margin-top:6px'>" + esc(C.contactHeader || "Contact Us") + "</div><div class='c sm'>" + contactHTML + "</div><hr class='dbl'/>" : "") +
@@ -3822,31 +3864,49 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     // Works on any Windows machine that has the thermal printer installed as
     // a normal Windows printer — no QZ Tray required.
     function browserPrint(order) {
-      return new Promise(function (resolve) {
-        var f = document.createElement("iframe");
-        f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
-        document.body.appendChild(f);
-        var html = buildReceiptHTML(order);
-        try {
-          f.contentDocument.open();
-          f.contentDocument.write(html);
-          f.contentDocument.close();
-        } catch (e) { resolve(false); return; }
-        setTimeout(function () {
+      return enrichOrder(order).then(function (enriched) {
+        return new Promise(function (resolve) {
+          var f = document.createElement("iframe");
+          f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+          document.body.appendChild(f);
+          var html = buildReceiptHTML(enriched);
           try {
-            f.contentWindow.focus();
-            f.contentWindow.print();
-          } catch (e) {}
-          setTimeout(function () { try { f.remove(); } catch (_) {} resolve(true); }, 1500);
-        }, 400);
+            f.contentDocument.open();
+            f.contentDocument.write(html);
+            f.contentDocument.close();
+          } catch (e) { resolve(false); return; }
+          setTimeout(function () {
+            try {
+              f.contentWindow.focus();
+              f.contentWindow.print();
+            } catch (e) {}
+            setTimeout(function () { try { f.remove(); } catch (_) {} resolve(true); }, 1500);
+          }, 400);
+        });
       });
+    }
+
+    // Fetches the customer's running loyalty balance so it prints on the
+    // ticket. Best-effort — a lookup failure just skips that line. Also
+    // caches the branch snapshot's phone if the order didn't embed one.
+    function enrichOrder(order) {
+      var enriched = Object.assign({}, order);
+      if (!window.FB || !window.FB.getCustomerByPhone || !order.userPhone) {
+        return Promise.resolve(enriched);
+      }
+      return window.FB.getCustomerByPhone(order.userPhone).then(function (c) {
+        if (c && c.loyaltyPoints != null) enriched.loyaltyBalance = Number(c.loyaltyPoints) || 0;
+        return enriched;
+      }).catch(function () { return enriched; });
     }
 
     // ── Send to printer ─────────────────────────────────────
     // Uses ESC/POS raw mode, which QZ Tray sends silently (no OS print dialog).
     function _doPrint(order) {
       var target = printerFor(order);
-      return qz.printers.find(target).then(function (printer) {
+      return Promise.all([qz.printers.find(target), enrichOrder(order)]).then(function (arr) {
+        var printer = arr[0];
+        var enriched = arr[1];
         var actualPrinter = Array.isArray(printer) ? printer[0] : printer;
         if (!actualPrinter) throw new Error("Printer not found: " + target);
 
@@ -3859,7 +3919,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         var data = [{
           type: "raw",
           format: "plain",
-          data: buildReceipt(order)
+          data: buildReceipt(enriched)
         }];
         return qz.print(config, data);
       });
