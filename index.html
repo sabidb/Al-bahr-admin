@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.6.0";
+const APP_VERSION = "8.7.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -179,6 +179,7 @@ function OrderCard({ order, onStatusChange, onAccept, onDecline, onAssignDriver,
           !isTerminal && etaMinutes && React.createElement("span", { className: "tag", style: { fontSize: 10, background: "#EFF6FF", color: "#2563EB", border: "1px solid #BFDBFE" } }, "⏱️ ~" + etaMinutes + " min")
         ),
         React.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, order.userName || "Customer"),
+        order.userPhone && React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginTop: 1, fontWeight: 600 } }, "📱 " + order.userPhone),
         React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", marginTop: 1 } }, timeAgo)
       ),
       React.createElement("div", { style: { textAlign: "right", flexShrink: 0 } },
@@ -188,6 +189,29 @@ function OrderCard({ order, onStatusChange, onAccept, onDecline, onAssignDriver,
     ),
     // Expanded details
     expanded && React.createElement("div", { style: { padding: "0 16px 16px", borderTop: "1px solid " + cfg.border + "80", paddingTop: 14 } },
+      // Customer contact block
+      React.createElement("div", { style: { background: "#fff", borderRadius: 12, padding: "10px 12px", marginBottom: 10, border: "1px solid #EAECF2", fontSize: 12 } },
+        React.createElement("div", { style: { fontSize: 10, fontWeight: 700, color: "#6B7280", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 } }, "👤 Customer"),
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 3 } },
+          React.createElement("span", { style: { color: "#6B7280" } }, "Name"),
+          React.createElement("span", { style: { color: "#1A1D27", fontWeight: 700 } }, order.userName || "—")
+        ),
+        order.userPhone && React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 3 } },
+          React.createElement("span", { style: { color: "#6B7280" } }, "Phone"),
+          React.createElement("a", { href: "tel:" + order.userPhone, style: { color: "#2563EB", fontWeight: 700, textDecoration: "none" } }, order.userPhone)
+        ),
+        order.address && React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 3, gap: 8 } },
+          React.createElement("span", { style: { color: "#6B7280", flexShrink: 0 } }, "Address"),
+          React.createElement("span", { style: { color: "#1A1D27", fontWeight: 600, textAlign: "right" } }, order.address)
+        ),
+        order.pickupTime && React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 3 } },
+          React.createElement("span", { style: { color: "#6B7280" } }, "Pickup"),
+          React.createElement("span", { style: { color: "#1A1D27", fontWeight: 700 } }, order.pickupTime)
+        ),
+        order.note && React.createElement("div", { style: { marginTop: 6, padding: "6px 10px", background: "#FEF9C3", border: "1px solid #FDE68A", borderRadius: 8, color: "#854D0E", fontWeight: 700, fontStyle: "italic" } },
+          "📝 " + order.note
+        )
+      ),
       // Items
       order.items && order.items.length > 0 && React.createElement("div", { style: { background: "#fff", borderRadius: 12, padding: "10px 12px", marginBottom: 12, border: "1px solid #EAECF2" } },
         order.items.map((item, i) =>
@@ -251,7 +275,7 @@ function OrderCard({ order, onStatusChange, onAccept, onDecline, onAssignDriver,
 
       // Actions
       React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
-        order.status === "new" && React.createElement(React.Fragment, null,
+        (order.status === "new" || order.status === "pending") && React.createElement(React.Fragment, null,
           React.createElement("button", {
             onClick: () => onAccept ? onAccept(order) : onStatusChange(order.orderNo, "preparing"),
             className: "btn-green",
@@ -1479,7 +1503,7 @@ function OwnerHome({ orders, branches, onOpenBranch }) {
     const today = bOrders.filter(o => new Date(o.date).toDateString() === todayStr);
     const todayGross = today.reduce((s, o) => s + (o.total || 0), 0);
     const totalGross = bOrders.reduce((s, o) => s + (o.total || 0), 0);
-    const news = today.filter(o => o.status === "new").length;
+    const news = today.filter(o => o.status === "new" || o.status === "pending").length;
     return { b: b, orders: bOrders.length, todayCount: today.length, todayGross: todayGross, totalGross: totalGross, news: news };
   });
   const totalToday = perBranch.reduce((s, r) => s + r.todayCount, 0);
@@ -2832,7 +2856,7 @@ function App() {
           }));
           const filtered = selectedBranch === "all" ? mapped : mapped.filter(o => o.branch === selectedBranch);
           setOrders(filtered);
-          const newOnes = filtered.filter(o => o.status === "new");
+          const newOnes = filtered.filter(o => o.status === "new" || o.status === "pending");
           if (newOnes.length > 0) {
             setBellAnim(true);
             setTimeout(() => setBellAnim(false), 1000);
@@ -3040,7 +3064,7 @@ function App() {
     return () => clearInterval(timer);
   }, [loggedIn]);
 
-  const newCount = orders.filter(o => o.status === "new").length;
+  const newCount = orders.filter(o => o.status === "new" || o.status === "pending").length;
   const allTabs = [
     { id: "home", icon: "🏠", label: "Home", ownerOnly: true },
     { id: "orders", icon: "📦", label: "Orders", badge: newCount > 0 ? newCount : null },
@@ -3260,7 +3284,7 @@ function App() {
                   React.createElement("div", { style: { color: "#6B7280", fontSize: 14, fontWeight: 500 } }, orderFilter === "all" ? "No orders today" : "No " + orderFilter + " orders today"),
                   React.createElement("div", { style: { color: "#9CA3AF", fontSize: 12, marginTop: 6 } }, "Orders appear here in real time")
                 )
-              : filteredOrders.map(o => React.createElement(OrderCard, { key: o.fbId || o.orderNo, order: o, onStatusChange: handleStatusChange, onAccept: handleAcceptOrder, onDecline: handleDeclineOrder, onAssignDriver: handleAssignDriver, onOverride: isOwner ? handleOverride : undefined, isNew: o.status === "new" }))
+              : filteredOrders.map(o => React.createElement(OrderCard, { key: o.fbId || o.orderNo, order: o, onStatusChange: handleStatusChange, onAccept: handleAcceptOrder, onDecline: handleDeclineOrder, onAssignDriver: handleAssignDriver, onOverride: isOwner ? handleOverride : undefined, isNew: o.status === "new" || o.status === "pending" }))
           );
         })()
       ),
