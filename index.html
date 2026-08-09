@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.9.0";
+const APP_VERSION = "8.9.1";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -3462,11 +3462,23 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         onOffersChange: function(cb){ return onSnapshot(doc(_db,"settings","offers"),function(s){ if(s.exists()) cb(s.data().items||[]); }); },
         // Push a notification into the customer's inbox subcollection. The
         // customer app subscribes to notifications/{phone}/items and shows the
-        // unread badge on the header bell.
+        // unread badge on the header bell. Phase 3 client-side guard: fields
+        // trimmed + length-clamped so a malformed payload doesn't ship (the
+        // rule enforces the same server-side, this is a nicer failure mode).
         sendNotification: async function(phone, notif){ try{
-          if(!phone) return false;
-          var payload = Object.assign({ sentAt: serverTimestamp(), readAt: null }, notif||{});
-          await addDoc(collection(_db, "notifications", String(phone), "items"), payload);
+          var ph = String(phone||"").trim();
+          if (!/^05\d{8}$/.test(ph)) { window.__fbErr("notification","invalid phone: "+phone); return false; }
+          var n = notif || {};
+          var title = String(n.title||"").trim();
+          var body  = String(n.body ||"").trim();
+          if (!title || title.length > 120) { window.__fbErr("notification","title must be 1-120 chars"); return false; }
+          if (!body  || body.length  > 1000){ window.__fbErr("notification","body must be 1-1000 chars"); return false; }
+          var payload = { title: title, body: body, read: false, createdAt: serverTimestamp() };
+          if (n.titleAr) payload.titleAr = String(n.titleAr).trim().slice(0, 120);
+          if (n.bodyAr)  payload.bodyAr  = String(n.bodyAr).trim().slice(0, 1000);
+          if (n.kind)    payload.kind    = String(n.kind).trim().slice(0, 30);
+          if (n.orderNo) payload.orderNo = String(n.orderNo).trim().slice(0, 20);
+          await addDoc(collection(_db, "notifications", ph, "items"), payload);
           return true;
         }catch(e){ window.__fbErr("notification",e); return false; } },
         // Invoice/receipt template config. One document, keyed internally by branchId.
