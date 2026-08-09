@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.11.1";
+const APP_VERSION = "8.12.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -351,7 +351,8 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
   const [branchView, setBranchView] = React.useState(initialView);
   const [search, setSearch] = React.useState("");
   const [editingId, setEditingId] = React.useState(null);
-  const [editData, setEditData] = React.useState({ price: "", name: "", nameAr: "", emoji: "", branches: ["all"] });
+  const [editData, setEditData] = React.useState({ price: "", name: "", nameAr: "", emoji: "", branches: ["all"], img: "" });
+  const [uploadingImg, setUploadingImg] = React.useState(false);
   const [saved, setSaved] = React.useState(false);
   const [adding, setAdding] = React.useState(false);
   const [newItem, setNewItem] = React.useState({
@@ -431,6 +432,9 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
           name: editData.name || i.name,
           nameAr: editData.nameAr || i.nameAr,
           emoji: editData.emoji || i.emoji,
+          // Empty string clears the photo (customer app falls back to the
+          // category icon); a URL persists it.
+          img: (editData.img != null ? editData.img : (i.img || "")) || undefined,
         });
         // Only the owner can change which branches an item belongs to.
         if (isOwner && Array.isArray(editData.branches) && editData.branches.length) patch.branches = editData.branches;
@@ -573,8 +577,38 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
                       React.createElement("input", { className: "inp", value: editData.emoji, onChange: e => setEditData(p => ({...p, emoji: e.target.value})), placeholder: "Emoji" }),
                       branchesChecklist(editData.branches, (bs) => setEditData(p => ({...p, branches: bs})))
                     ),
+                    // Product photo — preview + upload/clear. Empty string
+                    // means "use the fallback category icon" in the customer app.
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: 8, background: "#F9FAFB", border: "1px dashed #E5E7EB", borderRadius: 10 } },
+                      React.createElement("div", { style: { width: 56, height: 56, borderRadius: 10, background: "#fff", border: "1px solid #EAECF2", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } },
+                        editData.img
+                          ? React.createElement("img", { src: editData.img, alt: "", style: { width: "100%", height: "100%", objectFit: "cover" } })
+                          : React.createElement("span", { style: { fontSize: 22 } }, editData.emoji || "🍽️")
+                      ),
+                      React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                        React.createElement("div", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700, marginBottom: 6 } }, uploadingImg ? "Uploading…" : (editData.img ? "Photo set" : "No photo — will use icon")),
+                        React.createElement("div", { style: { display: "flex", gap: 6 } },
+                          React.createElement("label", { style: { padding: "6px 10px", background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: uploadingImg ? "wait" : "pointer" } },
+                            "📷 " + (editData.img ? "Replace" : "Upload"),
+                            React.createElement("input", {
+                              type: "file", accept: "image/*", style: { display: "none" }, disabled: uploadingImg,
+                              onChange: async (e) => {
+                                var f = e.target.files && e.target.files[0]; if (!f) return;
+                                setUploadingImg(true);
+                                try {
+                                  var res = await window.FB.uploadImage(f, "product", "item-" + item.id);
+                                  if (res.ok) setEditData(p => ({...p, img: res.url}));
+                                  else alert("Upload failed: " + res.error);
+                                } finally { setUploadingImg(false); e.target.value = ""; }
+                              }
+                            })
+                          ),
+                          editData.img && React.createElement("button", { onClick: () => setEditData(p => ({...p, img: ""})), style: { padding: "6px 10px", background: "#FEF2F2", color: "#B91C1C", border: "1px solid #FECACA", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer" } }, "Clear")
+                        )
+                      )
+                    ),
                     React.createElement("div", { style: { display: "flex", gap: 8 } },
-                      React.createElement("button", { onClick: () => saveEdit(item.id), className: "btn-primary", style: { flex: 1, padding: "10px", fontSize: 13 } }, "✅ Save"),
+                      React.createElement("button", { onClick: () => saveEdit(item.id), disabled: uploadingImg, className: "btn-primary", style: { flex: 1, padding: "10px", fontSize: 13, opacity: uploadingImg ? 0.6 : 1 } }, uploadingImg ? "Uploading…" : "✅ Save"),
                       React.createElement("button", { onClick: () => setEditingId(null), className: "btn-secondary", style: { padding: "10px 14px", fontSize: 13 } }, "Cancel")
                     )
                   )
@@ -590,7 +624,7 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
                     React.createElement("div", { key: "bot", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 } },
                       React.createElement("span", { style: { color: "#E60000", fontWeight: 800, fontSize: 15, flexShrink: 0 } }, "SR " + item.price),
                       React.createElement("div", { className: "m-actions", style: { display: "flex", gap: 6, flexShrink: 0 } },
-                        isOwner && React.createElement("button", { onClick: () => { setEditingId(item.id); setEditData({ price: String(item.price), name: item.name, nameAr: item.nameAr || "", emoji: item.emoji || "", branches: itemBranches(item).slice() }); }, style: { background: "#F4F5F9", border: "none", color: "#6B7280", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13 } }, "✏️"),
+                        isOwner && React.createElement("button", { onClick: () => { setEditingId(item.id); setEditData({ price: String(item.price), name: item.name, nameAr: item.nameAr || "", emoji: item.emoji || "", branches: itemBranches(item).slice(), img: item.img || "" }); }, style: { background: "#F4F5F9", border: "none", color: "#6B7280", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13 } }, "✏️"),
                         React.createElement("button", { onClick: () => toggleAvail(item.id), title: availHere ? "Turn OFF for " + (branchView === "all" ? "all branches" : branchName(isOwner ? branchView : branchScope)) : "Turn ON", style: { background: availHere ? "#ECFDF5" : "#FFF1F2", border: "none", color: availHere ? "#059669" : "#E60000", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 700 } }, availHere ? "✅" : "❌"),
                         isOwner && React.createElement("button", { onClick: () => deleteItem(item.id), style: { background: "#FFF1F2", border: "none", color: "#E60000", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13 } }, "🗑️")
                       )
@@ -3629,6 +3663,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
       var { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword, sendPasswordResetEmail, updatePassword, setPersistence, browserLocalPersistence, browserSessionPersistence }
         = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+      var { getStorage, ref: storageRef, uploadBytes, getDownloadURL }
+        = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js");
+      var { getFunctions, httpsCallable }
+        = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js");
       var _fbConfig = {
         apiKey: "AIzaSyB2PqybuRwuBjDQHgl1r9iFOC5b5lr81-s",
         authDomain: "broast-al-bahr.firebaseapp.com",
@@ -3647,6 +3685,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       } catch(_){ /* App Check may not yet be registered in Firebase console. */ }
       var _db = getFirestore(_app);
       var _auth = getAuth(_app);
+      var _storage = getStorage(_app);
+      // Callables live in me-west1 (same region as Firestore).
+      var _fns = getFunctions(_app, "me-west1");
       window.Auth = {
         signIn: function(email, pw){ return signInWithEmailAndPassword(_auth, email, pw); },
         signInRemember: async function(email, pw, remember){
@@ -3668,6 +3709,15 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
             await setDoc(doc(_db, "users", cred.user.uid), Object.assign({}, profile, { email: email, createdAt: serverTimestamp() }));
             await signOut(secAuth);
             try { await deleteApp(sec); } catch(_){}
+            // Best-effort: also mint the custom claim so the new user's ID
+            // token carries {role, branchId} from their next sign-in. The
+            // users doc write above is enough for today's rules; the claim
+            // is what future rules (Wave 2.1b) will gate on.
+            try {
+              if (window.FB && window.FB.setRole && profile && profile.role) {
+                await window.FB.setRole(cred.user.uid, profile.role, profile.branchId);
+              }
+            } catch(_){}
             return { ok: true, uid: cred.user.uid };
           } catch(e) {
             try { await signOut(secAuth); await deleteApp(sec); } catch(_){}
@@ -3801,6 +3851,50 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         listStaff: async function(){ try{ var snap=await getDocs(collection(_db,"users")); return snap.docs.map(function(d){ return Object.assign({uid:d.id},d.data()); }); }catch(e){ return []; } },
         deleteStaff: async function(uid){ try{ await deleteDoc(doc(_db,"users",uid)); return true; }catch(e){ window.__fbErr("staff",e); return false; } },
         updateStaffProfile: async function(uid, patch){ try{ await updateDoc(doc(_db,"users",uid),Object.assign({},patch,{updatedAt:serverTimestamp()})); return true; }catch(e){ window.__fbErr("staff",e); return false; } },
+        // Wave 2.1 callables. setRole is the privileged path — mints an
+        // Auth custom claim so future Firestore rules can gate on the token
+        // instead of a users/{uid} get(). Callers that fail with the
+        // callable fall back to the direct users-doc write for now, which
+        // the owner rule still permits during the migration.
+        setRole: async function(targetUid, role, branchId){
+          try {
+            var call = httpsCallable(_fns, "setRole");
+            var res = await call({ targetUid: targetUid, role: role, branchId: branchId || undefined });
+            return { ok: true, data: (res && res.data) || null };
+          } catch(e) {
+            window.__fbErr("setRole", e);
+            return { ok: false, error: (e && e.code) || (e && e.message) || String(e) };
+          }
+        },
+        whoami: async function(){
+          try {
+            var call = httpsCallable(_fns, "whoami");
+            var res = await call({});
+            return (res && res.data) || null;
+          } catch(e) { return null; }
+        },
+        // Upload a File/Blob to Storage and return its download URL. Path
+        // must start with "items/" — that's the only prefix storage.rules
+        // permits admin writes on. Filename is stamped with a millisecond
+        // suffix so re-uploads don't clobber a browser cache still holding
+        // the old CDN URL.
+        uploadImage: async function(file, pathPrefix, hint){
+          if (!file) return { ok: false, error: "no-file" };
+          if (file.size > 5 * 1024 * 1024) return { ok: false, error: "file too large (5MB max)" };
+          if (!/^image\//.test(file.type || "")) return { ok: false, error: "not an image" };
+          var safeHint = String(hint || "img").toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(0, 40);
+          var ext = (file.name && file.name.match(/\.(\w{2,5})$/) || [,"jpg"])[1].toLowerCase();
+          var path = "items/" + (pathPrefix || "misc") + "-" + safeHint + "-" + Date.now() + "." + ext;
+          try {
+            var r = storageRef(_storage, path);
+            var snap = await uploadBytes(r, file, { contentType: file.type });
+            var url = await getDownloadURL(snap.ref);
+            return { ok: true, url: url, path: path };
+          } catch(e) {
+            window.__fbErr("upload", e);
+            return { ok: false, error: (e && e.code) || (e && e.message) || String(e) };
+          }
+        },
       };
       console.log("Firebase ready ✅");
     } catch(e) { console.log("Firebase unavailable:", e.message); }
