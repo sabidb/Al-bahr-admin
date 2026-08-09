@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.9.1";
+const APP_VERSION = "8.9.2";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -35,6 +35,7 @@ const ADMIN_STYLES = `
   ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-track { background: #F0F1F5; } ::-webkit-scrollbar-thumb { background: #E60000; border-radius: 4px; }
   @keyframes pulse-red { 0%,100%{box-shadow:0 0 0 0 rgba(230,0,0,0.3)} 50%{box-shadow:0 0 0 8px rgba(230,0,0,0)} }
   @keyframes live-breathe { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.82)} }
+  @keyframes refresh-spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
   @keyframes slide-up { from{transform:translateY(16px);opacity:0} to{transform:translateY(0);opacity:1} }
   @keyframes fade-in { from{opacity:0} to{opacity:1} }
   @keyframes float-in { from{transform:translateY(80px);opacity:0} to{transform:translateY(0);opacity:1} }
@@ -2699,6 +2700,18 @@ function App() {
   const [orderFilter, setOrderFilter] = React.useState("all");
   const [fbConnected, setFbConnected] = React.useState(false);
   const [bellAnim, setBellAnim] = React.useState(false);
+  // Bumping this key tears down every live Firestore listener and re-subscribes.
+  // Manual escape hatch for "the realtime stream looks stale" without needing
+  // a full logout — pressed via the header refresh button.
+  const [refreshKey, setRefreshKey] = React.useState(0);
+  const [refreshing, setRefreshing] = React.useState(false);
+  const doRefresh = React.useCallback(() => {
+    setRefreshing(true);
+    setRefreshKey((k) => k + 1);
+    // The effect re-subscribes synchronously on the next render; give the
+    // spinner a beat so the user sees feedback even on a fast round-trip.
+    setTimeout(() => setRefreshing(false), 900);
+  }, []);
   // Kept in a ref so the onOrdersChange listener always reads the current
   // toggle without needing to re-subscribe when the setting changes.
   const autoAcceptRef = React.useRef(false);
@@ -2917,7 +2930,7 @@ function App() {
     }; // end startListeners
     waitForFB(20); // try up to 20 times (6 seconds)
     return () => { cancelled = true; if(unsubOrders)unsubOrders(); if(unsubMenu)unsubMenu(); if(unsubCustomers)unsubCustomers(); };
-  }, [loggedIn, selectedBranch]);
+  }, [loggedIn, selectedBranch, refreshKey]);
 
   const handleStatusChange = async (orderNo, next) => {
     setOrders(p => p.map(o => o.orderNo === orderNo ? {...o, status: next} : o));
@@ -3264,6 +3277,16 @@ function App() {
         ),
         newCount > 0 && React.createElement("div", { style: { background: "#E60000", borderRadius: 20, padding: "4px 10px", fontSize: 11, fontWeight: 700, color: "#fff", animation: "pulse-red 2s infinite" } },
           "🔔 " + newCount
+        ),
+        React.createElement("button", {
+          onClick: doRefresh,
+          title: "Refresh live data",
+          disabled: refreshing,
+          style: { background: refreshing ? "#F1F5F9" : "#EFF6FF", border: "1px solid " + (refreshing ? "#CBD5E1" : "#BFDBFE"), color: refreshing ? "#64748B" : "#1D4ED8", padding: "6px 10px", borderRadius: 10, cursor: refreshing ? "wait" : "pointer", fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 },
+        },
+          React.createElement("span", { style: { display: "inline-block", transformOrigin: "center", animation: refreshing ? "refresh-spin 0.8s linear infinite" : "none" } }, "↻"),
+          " ",
+          refreshing ? "Syncing" : "Refresh",
         ),
         isOwner && React.createElement("button", { onClick: () => { setSelectedBranch(null); setOrders([]); }, style: { background: "#FFF7ED", border: "1px solid #FED7AA", color: "#EA580C", padding: "6px 10px", borderRadius: 10, cursor: "pointer", fontSize: 11, fontWeight: 700 } }, "🏪"),
         React.createElement("button", { onClick: doLogout, title: "Sign out", style: { background: "#FFF1F2", border: "1px solid #FECACA", color: "#E60000", padding: "6px 10px", borderRadius: 10, cursor: "pointer", fontSize: 11, fontWeight: 700 } }, "✕")
