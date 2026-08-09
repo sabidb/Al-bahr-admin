@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.11.0";
+const APP_VERSION = "8.11.1";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -3952,10 +3952,14 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var BOLD_OFF  = ESC + "E\x00";
       var CENTER    = ESC + "a\x01";
       var LEFT      = ESC + "a\x00";
-      // Single-height normal font only per house style — no double-size
-      // heads. Bold is left on for section labels; drop it too if the head
-      // renders it thick enough to smear.
+      // GS ! n — bits 0-3 width multiplier, bits 4-7 height multiplier.
+      // NORMAL = 1x1, TALL = 1x2 (double height, char width unchanged so pad()
+      // math still lines up), BIG = 2x2. TALL is the everyday emphasis size
+      // for anything the cook reads at arm's length; BIG is reserved for the
+      // order number so the runner reads it across the counter.
       var NORMAL    = GS  + "!\x00";
+      var TALL      = GS  + "!\x10";
+      var BIG       = GS  + "!\x11";
       var CUT       = GS  + "V\x42\x00";
 
       var W = Math.max(24, Math.min(64, Number(C.paperWidth) || 32));
@@ -4012,8 +4016,13 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         lines.push(CENTER + "Tel " + stripEmoji(branchPhone) + LF);
       }
 
-      // Order details
-      if (C.showOrderNo) lines.push(BOLD_ON + "Order:" + BOLD_OFF + "  #" + stripEmoji(order.orderNo) + LF);
+      // Order details. Order number gets the biggest text on the paper —
+      // BIG (2x width + 2x height) means each char is 24 dots, so line width
+      // in chars halves; center-alignment handles the layout without needing
+      // pad() to know about it.
+      if (C.showOrderNo) {
+        lines.push(CENTER + BIG + "#" + stripEmoji(order.orderNo) + LF + NORMAL + LEFT);
+      }
       if (C.showType) lines.push(BOLD_ON + "Type:" + BOLD_OFF + "   " + (order.orderType === "pickup" ? "Pickup" : "Delivery") + LF);
       if (C.showStatus && order.status) lines.push(BOLD_ON + "Status:" + BOLD_OFF + " " + stripEmoji(order.status) + LF);
       if (C.showDate) lines.push(BOLD_ON + "Placed:" + BOLD_OFF + " " + dateStr + " " + timeStr + LF);
@@ -4024,7 +4033,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       // Customer
       if (C.showCustomer) {
         lines.push(BOLD_ON + "Customer" + BOLD_OFF + LF);
-        lines.push(BOLD_ON + "Name:" + BOLD_OFF + "   " + stripEmoji(order.userName || "Customer") + LF);
+        // Name on its own TALL line — kitchen calls it out, so it needs to be
+        // readable from across the pass.
+        lines.push(TALL + BOLD_ON + stripEmoji(order.userName || "Customer") + BOLD_OFF + LF + NORMAL);
         if (C.showPhone && order.userPhone) lines.push(BOLD_ON + "Phone:" + BOLD_OFF + "  " + stripEmoji(order.userPhone) + LF);
         if (C.showPayment) lines.push(BOLD_ON + "Pay:" + BOLD_OFF + "    " + stripEmoji(order.paymentMethod || "cash") + LF);
         if (C.showLocation && order.orderType === "delivery" && order.locationLink) {
@@ -4040,11 +4051,16 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         lines.push(line("-"));
         (order.items || []).forEach(function (item) {
           var name = stripEmoji(item.name || "");
-          var price = "SR " + ((item.price || 0) * (item.qty || 1)).toFixed(2);
-          lines.push(pad(name.substring(0, W - price.length - 1), price) + LF);
+          var qty = item.qty || 1;
+          var price = "SR " + ((item.price || 0) * qty).toFixed(2);
+          // Name, qty and any customer note in TALL so the cook can read the
+          // three things they actually build off at a glance; price stays
+          // normal below, right-aligned via pad().
+          lines.push(TALL + BOLD_ON + name + BOLD_OFF + LF + NORMAL);
           if (C.showItemArabic && item.nameAr) lines.push("  " + stripEmoji(item.nameAr) + LF);
-          lines.push("  x" + (item.qty || 1) + LF);
-          if (item.note) lines.push(BOLD_ON + "  >> " + stripEmoji(item.note) + BOLD_OFF + LF);
+          lines.push(TALL + BOLD_ON + "  x" + qty + BOLD_OFF + LF + NORMAL);
+          lines.push(pad("", price) + LF);
+          if (item.note) lines.push(TALL + BOLD_ON + "  >> " + stripEmoji(item.note) + BOLD_OFF + LF + NORMAL);
         });
         lines.push(line("-"));
         if (subtotal != null) lines.push(pad("Subtotal", "SR " + subtotal.toFixed(2)) + LF);
@@ -4052,7 +4068,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         if (order.deliveryFee) lines.push(pad("Delivery Fee", "SR " + Number(order.deliveryFee).toFixed(2)) + LF);
         if (discount) lines.push(pad("Discount", "-SR " + discount.toFixed(2)) + LF);
         if (order.couponCode) lines.push(pad("Coupon", stripEmoji(order.couponCode)) + LF);
-        lines.push(BOLD_ON + pad("TOTAL", "SR " + total.toFixed(2)) + BOLD_OFF + LF);
+        // TALL keeps normal character width, so pad()'s alignment survives
+        // even though every char is now twice as tall.
+        lines.push(TALL + BOLD_ON + pad("TOTAL", "SR " + total.toFixed(2)) + BOLD_OFF + LF + NORMAL);
         var inclVat = order.vat || Math.round(total / 1.15 * 0.15 * 100) / 100;
         lines.push(CENTER + "(Prices incl. 15% VAT: SR " + inclVat.toFixed(2) + ")" + LF);
         lines.push(line("="));
