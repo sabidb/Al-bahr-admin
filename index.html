@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.8.0";
+const APP_VERSION = "8.8.1";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -2832,28 +2832,40 @@ function App() {
             seen.add(o.fbId);
             return true;
           });
-          const mapped = unique.map(o => ({
-            orderNo: o.orderNo || (o.fbId ? o.fbId.slice(-6) : "000000"),
-            date: o.date || (o.createdAt && o.createdAt.toDate ? o.createdAt.toDate().toISOString() : new Date().toISOString()),
-            userName: o.userName || "Customer",
-            userPhone: o.userPhone || "",
-            items: o.items || [],
-            total: o.total || 0,
-            vat: o.vat || 0,
-            platformFee: o.platformFee || 0,
-            deliveryFee: o.deliveryFee || 0,
-            orderType: o.orderType || "pickup",
-            paymentMethod: o.paymentMethod || "cash",
-            status: o.status || "new",
-            branch: o.branch || "",
-            locationLink: o.locationLink || "",
-            fbId: o.fbId,
-            address: o.address || "",
-            driverName: o.driverName || "",
-            driverPhone: o.driverPhone || "",
-            overrides: o.overrides || [],
-            rating: o.rating || null,
-          }));
+          const mapped = unique.map(o => {
+            // Customer app writes real numbers into o.totals ({subtotal, pFee, vat, total});
+            // fall back to legacy top-level fields for orders placed before Phase 2.
+            const t = o.totals || {};
+            return {
+              orderNo: o.orderNo || (o.fbId ? o.fbId.slice(-6) : "000000"),
+              date: o.date || (o.createdAt && o.createdAt.toDate ? o.createdAt.toDate().toISOString() : new Date().toISOString()),
+              userName: o.userName || "Customer",
+              userPhone: o.userPhone || "",
+              userUid: o.userUid || "",
+              items: o.items || [],
+              total: (typeof t.total === "number" ? t.total : o.total) || 0,
+              subtotal: (typeof t.subtotal === "number" ? t.subtotal : o.subtotal) || 0,
+              vat: (typeof t.vat === "number" ? t.vat : o.vat) || 0,
+              platformFee: (typeof t.pFee === "number" ? t.pFee : o.platformFee) || 0,
+              discount: (typeof t.discount === "number" ? t.discount : o.discount) || 0,
+              deliveryFee: o.deliveryFee || 0,
+              orderType: o.orderType || "pickup",
+              pickupTime: o.pickupTime || "",
+              paymentMethod: o.paymentMethod || "cash",
+              status: o.status || "new",
+              branch: o.branch || "",
+              branchObj: o.branchObj || null,
+              locationLink: o.locationLink || "",
+              fbId: o.fbId,
+              address: o.address || "",
+              note: o.note || "",
+              couponCode: o.couponCode || "",
+              driverName: o.driverName || "",
+              driverPhone: o.driverPhone || "",
+              overrides: o.overrides || [],
+              rating: o.rating || null,
+            };
+          });
           const filtered = selectedBranch === "all" ? mapped : mapped.filter(o => o.branch === selectedBranch);
           setOrders(filtered);
           const newOnes = filtered.filter(o => o.status === "new" || o.status === "pending");
@@ -3334,7 +3346,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     try {
       var { initializeApp, deleteApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
       var { initializeAppCheck, ReCaptchaV3Provider } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check.js");
-      var { getFirestore, doc, getDoc, setDoc, addDoc, collection, onSnapshot, updateDoc, deleteDoc, serverTimestamp, getDocs, query, where }
+      var { getFirestore, doc, getDoc, setDoc, addDoc, collection, onSnapshot, updateDoc, deleteDoc, serverTimestamp, getDocs, query, where, limit }
         = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
       var { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword, sendPasswordResetEmail, updatePassword, setPersistence, browserLocalPersistence, browserSessionPersistence }
         = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
@@ -3407,10 +3419,18 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         // Customer directory is a single Firestore collection — every branch
         // manager reads it, so a phone number entered at any branch is
         // discoverable at every other branch.
+        // Phase 2 keys customers by Firebase Auth uid, so a phone lookup has
+        // to query the `phone` field. Legacy pre-Phase-2 docs were keyed by
+        // phone directly — fall back to that if the query finds nothing.
         getCustomerByPhone: async function(ph){ try{
           if(!ph) return null;
-          var s = await getDoc(doc(_db,"customers",ph));
-          return s.exists() ? Object.assign({ phone: ph }, s.data()) : null;
+          try {
+            var q1 = query(collection(_db,"customers"), where("phone","==", ph), limit(1));
+            var snap = await getDocs(q1);
+            if (!snap.empty) { var d = snap.docs[0]; return Object.assign({ id: d.id, phone: ph }, d.data()); }
+          } catch(_) {}
+          var s = await getDoc(doc(_db,"customers", ph));
+          return s.exists() ? Object.assign({ id: ph, phone: ph }, s.data()) : null;
         }catch(e){ return null; } },
         // Look up an order by its 6-digit orderNo (100000+). Falls back to a
         // full scan if the indexed query fails — small collection, cheap.
