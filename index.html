@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.8.1";
+const APP_VERSION = "8.8.2";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -3597,6 +3597,20 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       INVOICE_CFG = { global: newCfg.global || {}, byBranch: newCfg.byBranch || {} };
     }
 
+    // Strip any emoji / pictograph so the thermal head only emits characters
+    // it can actually render. Kills emoji presentation selectors and ZWJs too,
+    // then collapses whitespace and trims. Applied to every printed string.
+    function stripEmoji(s) {
+      if (s == null) return "";
+      var str = String(s);
+      try {
+        str = str.replace(/[☀-➿]/g, "");
+        str = str.replace(/[\uD83C-\uDBFF][\uDC00-\uDFFF]/g, "");
+        str = str.replace(/[︎️‍]/g, "");
+      } catch(_) {}
+      return str.replace(/\s+/g, " ").trim();
+    }
+
     // ── Build ESC/POS receipt ───────────────────────────────
     function buildReceipt(order) {
       var C = resolveConfig(order.branch);
@@ -3607,7 +3621,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var BOLD_OFF  = ESC + "E\x00";
       var CENTER    = ESC + "a\x01";
       var LEFT      = ESC + "a\x00";
-      var BIG       = GS  + "!\x11";
+      // Single-height normal font only per house style — no double-size
+      // heads. Bold is left on for section labels; drop it too if the head
+      // renders it thick enough to smear.
       var NORMAL    = GS  + "!\x00";
       var CUT       = GS  + "V\x42\x00";
 
@@ -3635,25 +3651,31 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       }
 
       var lines = [];
+      // Order sub/discount are useful even when the manager hasn't opted into
+      // the subtotal breakdown — always render every field the customer saw.
+      var subtotal = (order.subtotal != null ? Number(order.subtotal) : null);
+      var discount = (order.discount != null ? Number(order.discount) : 0);
 
-      // Header
-      lines.push(CENTER + BIG + BOLD_ON + (C.header || "").toUpperCase() + NORMAL + BOLD_OFF + LF);
-      if (C.tagline) lines.push(CENTER + C.tagline + LF);
-      if (C.showBranchName && branchName) lines.push(CENTER + branchName + (C.branchSuffix || "") + LF);
+      // Header (normal font, still centered + bold for readability).
+      lines.push(NORMAL);
+      lines.push(CENTER + BOLD_ON + stripEmoji((C.header || "").toUpperCase()) + BOLD_OFF + LF);
+      if (C.tagline) lines.push(CENTER + stripEmoji(C.tagline) + LF);
+      if (C.showBranchName && branchName) lines.push(CENTER + stripEmoji(branchName + (C.branchSuffix || "")) + LF);
       lines.push(LEFT + line("="));
 
       // Order details
-      if (C.showOrderNo) lines.push(BOLD_ON + "Order:" + BOLD_OFF + "  #" + order.orderNo + LF);
+      if (C.showOrderNo) lines.push(BOLD_ON + "Order:" + BOLD_OFF + "  #" + stripEmoji(order.orderNo) + LF);
       if (C.showType) lines.push(BOLD_ON + "Type:" + BOLD_OFF + "   " + (order.orderType === "pickup" ? "Pickup" : "Delivery") + LF);
       if (C.showDate) lines.push(BOLD_ON + "Date:" + BOLD_OFF + "   " + dateStr + " " + timeStr + LF);
+      if (order.pickupTime) lines.push(BOLD_ON + "Pickup:" + BOLD_OFF + " " + stripEmoji(order.pickupTime) + LF);
       lines.push(LEFT + line("-"));
 
       // Customer
       if (C.showCustomer) {
         lines.push(BOLD_ON + "Customer" + BOLD_OFF + LF);
-        lines.push(BOLD_ON + "Name:" + BOLD_OFF + "   " + (order.userName || "Customer") + LF);
-        if (C.showPhone && order.userPhone) lines.push(BOLD_ON + "Phone:" + BOLD_OFF + "  " + order.userPhone + LF);
-        if (C.showPayment) lines.push(BOLD_ON + "Pay:" + BOLD_OFF + "    " + (order.paymentMethod || "cash") + LF);
+        lines.push(BOLD_ON + "Name:" + BOLD_OFF + "   " + stripEmoji(order.userName || "Customer") + LF);
+        if (C.showPhone && order.userPhone) lines.push(BOLD_ON + "Phone:" + BOLD_OFF + "  " + stripEmoji(order.userPhone) + LF);
+        if (C.showPayment) lines.push(BOLD_ON + "Pay:" + BOLD_OFF + "    " + stripEmoji(order.paymentMethod || "cash") + LF);
         if (C.showLocation && order.orderType === "delivery" && order.locationLink) {
           lines.push(BOLD_ON + "Location:" + BOLD_OFF + LF);
           lines.push(order.locationLink.substring(0, W) + LF);
@@ -3666,51 +3688,57 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         lines.push(CENTER + BOLD_ON + "ITEMS" + BOLD_OFF + LF);
         lines.push(line("-"));
         (order.items || []).forEach(function (item) {
-          var name = (item.emoji || "") + " " + (item.name || "");
+          var name = stripEmoji(item.name || "");
           var price = "SR " + ((item.price || 0) * (item.qty || 1)).toFixed(2);
           lines.push(pad(name.substring(0, W - price.length - 1), price) + LF);
-          if (C.showItemArabic && item.nameAr) lines.push("  " + item.nameAr + LF);
+          if (C.showItemArabic && item.nameAr) lines.push("  " + stripEmoji(item.nameAr) + LF);
           lines.push("  x" + (item.qty || 1) + LF);
-          if (item.note) lines.push(BOLD_ON + "  >> " + item.note + BOLD_OFF + LF);
+          if (item.note) lines.push(BOLD_ON + "  >> " + stripEmoji(item.note) + BOLD_OFF + LF);
         });
         lines.push(line("-"));
-        if (C.showSubtotalBreakdown) {
-          if (order.subtotal !== undefined) lines.push(pad("Subtotal", "SR " + Number(order.subtotal).toFixed(2)) + LF);
-          if (order.platformFee) lines.push(pad("Platform Fee", "SR " + Number(order.platformFee).toFixed(2)) + LF);
-          if (order.deliveryFee) lines.push(pad("Delivery Fee", "SR " + Number(order.deliveryFee).toFixed(2)) + LF);
-        }
+        if (subtotal != null) lines.push(pad("Subtotal", "SR " + subtotal.toFixed(2)) + LF);
+        if (order.platformFee) lines.push(pad("Platform Fee", "SR " + Number(order.platformFee).toFixed(2)) + LF);
+        if (order.deliveryFee) lines.push(pad("Delivery Fee", "SR " + Number(order.deliveryFee).toFixed(2)) + LF);
+        if (discount) lines.push(pad("Discount", "-SR " + discount.toFixed(2)) + LF);
+        if (order.couponCode) lines.push(pad("Coupon", stripEmoji(order.couponCode)) + LF);
         lines.push(BOLD_ON + pad("TOTAL", "SR " + total.toFixed(2)) + BOLD_OFF + LF);
         var inclVat = order.vat || Math.round(total / 1.15 * 0.15 * 100) / 100;
         lines.push(CENTER + "(Prices incl. 15% VAT: SR " + inclVat.toFixed(2) + ")" + LF);
         lines.push(line("="));
       }
 
+      // Order-level note (customer's "any special request" from checkout)
+      if (order.note) {
+        lines.push(BOLD_ON + "Note:" + BOLD_OFF + " " + stripEmoji(order.note) + LF);
+        lines.push(LEFT + line("-"));
+      }
+
       // Loyalty
       if (C.showLoyalty) {
-        lines.push(CENTER + BOLD_ON + (C.loyaltyLabel || "Loyalty Points") + BOLD_OFF + LF);
+        lines.push(CENTER + BOLD_ON + stripEmoji(C.loyaltyLabel || "Loyalty Points") + BOLD_OFF + LF);
         lines.push(CENTER + "Earned this order: +" + pts + " pts" + LF);
         lines.push(LEFT + line("-"));
       }
 
       // Tax IDs
-      if (C.showTaxNumber && C.taxNumber) lines.push(BOLD_ON + "Tax#:" + BOLD_OFF + " " + C.taxNumber + LF);
-      if (C.showVatNumber && C.vatNumber) lines.push(BOLD_ON + "VAT#:" + BOLD_OFF + " " + C.vatNumber + LF);
+      if (C.showTaxNumber && C.taxNumber) lines.push(BOLD_ON + "Tax#:" + BOLD_OFF + " " + stripEmoji(C.taxNumber) + LF);
+      if (C.showVatNumber && C.vatNumber) lines.push(BOLD_ON + "VAT#:" + BOLD_OFF + " " + stripEmoji(C.vatNumber) + LF);
       if ((C.showTaxNumber && C.taxNumber) || (C.showVatNumber && C.vatNumber)) lines.push(LEFT + line("-"));
 
       // Contact block
       if (C.showBranchPhones) {
-        lines.push(CENTER + BOLD_ON + (C.contactHeader || "Contact Us") + BOLD_OFF + LF);
-        (C.contactLines || []).forEach(function (l) { if (l) lines.push(CENTER + l + LF); });
+        lines.push(CENTER + BOLD_ON + stripEmoji(C.contactHeader || "Contact Us") + BOLD_OFF + LF);
+        (C.contactLines || []).forEach(function (l) { if (l) lines.push(CENTER + stripEmoji(l) + LF); });
         lines.push(LEFT + line("="));
       }
 
       // Promo
-      if (C.promoLine) { lines.push(CENTER + C.promoLine + LF); lines.push(LEFT + line("-")); }
+      if (C.promoLine) { lines.push(CENTER + stripEmoji(C.promoLine) + LF); lines.push(LEFT + line("-")); }
 
       // Footer
-      if (C.footerLine1) lines.push(CENTER + BOLD_ON + C.footerLine1 + BOLD_OFF + LF);
-      if (C.footerLine2) lines.push(CENTER + C.footerLine2 + LF);
-      if (C.footerLine3) lines.push(CENTER + C.footerLine3 + LF);
+      if (C.footerLine1) lines.push(CENTER + BOLD_ON + stripEmoji(C.footerLine1) + BOLD_OFF + LF);
+      if (C.footerLine2) lines.push(CENTER + stripEmoji(C.footerLine2) + LF);
+      if (C.footerLine3) lines.push(CENTER + stripEmoji(C.footerLine3) + LF);
 
       var feed = Math.max(1, Number(C.feedLines) || 3);
       lines.push(LF.repeat(feed));
@@ -3731,11 +3759,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var when = d.toLocaleDateString("en-GB") + " " + d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
       var total = Number(order.total) || 0;
       var pts = total >= 500 ? 35 : total >= 250 ? 20 : total >= 100 ? 10 : 5;
-      function esc(s){ return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+      function esc(s){ return stripEmoji(String(s == null ? "" : s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
       var itemRows = (order.items || []).map(function(it){
-        var line = (it.emoji || "") + " " + (it.name || "") + (C.showItemArabic && it.nameAr ? " / " + it.nameAr : "");
+        var line = (it.name || "") + (C.showItemArabic && it.nameAr ? " / " + it.nameAr : "");
         var right = "SR " + ((it.price || 0) * (it.qty || 1)).toFixed(2);
-        var noteHTML = it.note ? "<div class='q' style='font-weight:800;color:#B45309;font-style:italic'>&gt;&gt; " + esc(it.note) + "</div>" : "";
+        var noteHTML = it.note ? "<div class='q' style='font-weight:800;color:#000;font-style:italic'>&gt;&gt; " + esc(it.note) + "</div>" : "";
         return "<tr><td class='n'>" + esc(line) + "<div class='q'>x" + (it.qty || 1) + "</div>" + noteHTML + "</td><td class='p'>" + esc(right) + "</td></tr>";
       }).join("");
 
@@ -3747,7 +3775,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         "@page{size:72mm auto;margin:0}" +
         "html,body{margin:0;padding:0;background:#fff;color:#000;font-family:'Courier New',monospace;font-size:12px;line-height:1.35;width:72mm}" +
         ".r{padding:6mm 4mm}" +
-        ".c{text-align:center}.b{font-weight:900}.big{font-size:16px}.sm{font-size:10.5px}" +
+        ".c{text-align:center}.b{font-weight:900}.big{font-size:12px}.sm{font-size:11px}" +
         "hr{border:none;border-top:1px dashed #000;margin:5px 0}.dbl{border-top:2px solid #000}" +
         "table{width:100%;border-collapse:collapse}td{vertical-align:top;padding:2px 0}" +
         ".n{width:70%}.p{width:30%;text-align:right;white-space:nowrap}.q{color:#333;font-size:10.5px;margin-top:1px}" +
@@ -3761,6 +3789,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
           (C.showOrderNo ? "<div class='row'><span class='b'>Order</span><span>#" + esc(order.orderNo) + "</span></div>" : "") +
           (C.showType ? "<div class='row'><span class='b'>Type</span><span>" + esc(order.orderType === "pickup" ? "Pickup" : "Delivery") + "</span></div>" : "") +
           (C.showDate ? "<div class='row'><span class='b'>Date</span><span>" + esc(when) + "</span></div>" : "") +
+          (order.pickupTime ? "<div class='row'><span class='b'>Pickup</span><span>" + esc(order.pickupTime) + "</span></div>" : "") +
           "<hr/>" +
           (C.showCustomer ? "<div class='b'>Customer</div>" +
             "<div class='row'><span>Name</span><span>" + esc(order.userName || "Customer") + "</span></div>" +
@@ -3769,11 +3798,14 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
             (C.showLocation && order.orderType === "delivery" && order.locationLink ? "<div class='sm'>" + esc(order.locationLink) + "</div>" : "") +
             "<hr/>" : "") +
           (C.showItems ? "<div class='c b'>ITEMS</div><hr/><table>" + itemRows + "</table><hr/>" +
-            (C.showSubtotalBreakdown && order.subtotal !== undefined ? "<div class='row'><span>Subtotal</span><span>SR " + Number(order.subtotal).toFixed(2) + "</span></div>" : "") +
-            (C.showSubtotalBreakdown && order.platformFee ? "<div class='row'><span>Platform Fee</span><span>SR " + Number(order.platformFee).toFixed(2) + "</span></div>" : "") +
-            (C.showSubtotalBreakdown && order.deliveryFee ? "<div class='row'><span>Delivery Fee</span><span>SR " + Number(order.deliveryFee).toFixed(2) + "</span></div>" : "") +
+            (order.subtotal != null ? "<div class='row'><span>Subtotal</span><span>SR " + Number(order.subtotal).toFixed(2) + "</span></div>" : "") +
+            (order.platformFee ? "<div class='row'><span>Platform Fee</span><span>SR " + Number(order.platformFee).toFixed(2) + "</span></div>" : "") +
+            (order.deliveryFee ? "<div class='row'><span>Delivery Fee</span><span>SR " + Number(order.deliveryFee).toFixed(2) + "</span></div>" : "") +
+            (order.discount ? "<div class='row'><span>Discount</span><span>-SR " + Number(order.discount).toFixed(2) + "</span></div>" : "") +
+            (order.couponCode ? "<div class='row'><span>Coupon</span><span>" + esc(order.couponCode) + "</span></div>" : "") +
             "<div class='row b big'><span>TOTAL</span><span>SR " + total.toFixed(2) + "</span></div>" +
             "<div class='c sm'>(Prices incl. 15% VAT: SR " + (order.vat || Math.round(total / 1.15 * 0.15 * 100) / 100).toFixed(2) + ")</div><hr class='dbl'/>" : "") +
+          (order.note ? "<div><span class='b'>Note:</span> " + esc(order.note) + "</div><hr/>" : "") +
           (C.showLoyalty ? "<div class='c b'>" + esc(C.loyaltyLabel || "Loyalty Points") + "</div><div class='c'>Earned this order: +" + pts + " pts</div><hr/>" : "") +
           ((C.showTaxNumber && C.taxNumber) ? "<div class='row'><span class='b'>Tax#</span><span>" + esc(C.taxNumber) + "</span></div>" : "") +
           ((C.showVatNumber && C.vatNumber) ? "<div class='row'><span class='b'>VAT#</span><span>" + esc(C.vatNumber) + "</span></div>" : "") +
