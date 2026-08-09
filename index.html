@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.13.0";
+const APP_VERSION = "8.14.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -354,12 +354,12 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
   const [branchView, setBranchView] = React.useState(initialView);
   const [search, setSearch] = React.useState("");
   const [editingId, setEditingId] = React.useState(null);
-  const [editData, setEditData] = React.useState({ price: "", name: "", nameAr: "", emoji: "", branches: ["all"], img: "" });
+  const [editData, setEditData] = React.useState({ price: "", menuPrice: "", name: "", nameAr: "", emoji: "", branches: ["all"], img: "" });
   const [uploadingImg, setUploadingImg] = React.useState(false);
   const [saved, setSaved] = React.useState(false);
   const [adding, setAdding] = React.useState(false);
   const [newItem, setNewItem] = React.useState({
-    name: "", nameAr: "", price: "", emoji: "🍗", category: "🍗 Broast", cal: "", prepMinutes: 8,
+    name: "", nameAr: "", price: "", menuPrice: "", emoji: "🍗", category: "🍗 Broast", cal: "", prepMinutes: 8,
     branches: isOwner ? ["all"] : [branchScope],
   });
 
@@ -426,12 +426,17 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
   const saveEdit = (id) => {
     const p = parseFloat(editData.price);
     if (isNaN(p) || p <= 0) return;
+    // menuPrice — Phase 6 standard counter price. Blank = "same as app price".
+    // A value lower than app price is nonsensical for reporting, so clamp up.
+    const mpRaw = parseFloat(editData.menuPrice);
+    const mp = (isNaN(mpRaw) || mpRaw <= 0) ? undefined : Math.max(mpRaw, p);
     const u = {};
     for (const [cat, items] of Object.entries(menu)) {
       u[cat] = items.map(i => {
         if (i.id !== id) return i;
         const patch = Object.assign({}, i, {
           price: p,
+          menuPrice: mp,
           name: editData.name || i.name,
           nameAr: editData.nameAr || i.nameAr,
           emoji: editData.emoji || i.emoji,
@@ -439,6 +444,8 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
           // category icon); a URL persists it.
           img: (editData.img != null ? editData.img : (i.img || "")) || undefined,
         });
+        // Firestore rejects `undefined` fields — strip the key if menuPrice cleared.
+        if (patch.menuPrice == null) delete patch.menuPrice;
         // Only the owner can change which branches an item belongs to.
         if (isOwner && Array.isArray(editData.branches) && editData.branches.length) patch.branches = editData.branches;
         return patch;
@@ -465,23 +472,28 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
     const newId = allIds.length > 0 ? Math.max(...allIds) + 1 : 1;
     const availability = {};
     (bs.indexOf("all") >= 0 ? BRANCH_LIST.map(b => b.id) : bs).forEach(bId => { availability[bId] = true; });
+    const priceNum = parseFloat(newItem.price);
+    const mpRaw = parseFloat(newItem.menuPrice);
+    const menuPrice = (isNaN(mpRaw) || mpRaw <= 0) ? undefined : Math.max(mpRaw, priceNum);
     const u = { ...menu };
     if (!u[newItem.category]) u[newItem.category] = [];
-    u[newItem.category] = [...u[newItem.category], {
+    const rec = {
       id: newId,
       name: newItem.name,
       nameAr: newItem.nameAr || newItem.name,
-      price: parseFloat(newItem.price),
+      price: priceNum,
       emoji: newItem.emoji || "🍗",
       cal: newItem.cal || "—",
       prepMinutes: Number(newItem.prepMinutes) || 8,
       branches: bs,
       availability: availability,
       available: true,
-    }];
+    };
+    if (menuPrice != null) rec.menuPrice = menuPrice;
+    u[newItem.category] = [...u[newItem.category], rec];
     persist(u);
     setAdding(false);
-    setNewItem({ name: "", nameAr: "", price: "", emoji: "🍗", category: categories[0] || "🍗 Broast", cal: "", prepMinutes: 8, branches: isOwner ? ["all"] : [branchScope] });
+    setNewItem({ name: "", nameAr: "", price: "", menuPrice: "", emoji: "🍗", category: categories[0] || "🍗 Broast", cal: "", prepMinutes: 8, branches: isOwner ? ["all"] : [branchScope] });
     setSaved(true); setTimeout(() => setSaved(false), 2000);
   };
 
@@ -541,7 +553,8 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
       React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 } },
         React.createElement("input", { className: "inp", placeholder: "Name (EN)*", value: newItem.name, onChange: e => setNewItem(p => ({...p, name: e.target.value})) }),
         React.createElement("input", { className: "inp", placeholder: "الاسم (AR)", value: newItem.nameAr, onChange: e => setNewItem(p => ({...p, nameAr: e.target.value})) }),
-        React.createElement("input", { className: "inp", type: "number", placeholder: "Price SR*", value: newItem.price, onChange: e => setNewItem(p => ({...p, price: e.target.value})) }),
+        React.createElement("input", { className: "inp", type: "number", placeholder: "App Price SR*", value: newItem.price, onChange: e => setNewItem(p => ({...p, price: e.target.value})) }),
+        React.createElement("input", { className: "inp", type: "number", placeholder: "Menu Price SR (opt.)", title: "Standard counter price. Leave blank to match the app price.", value: newItem.menuPrice, onChange: e => setNewItem(p => ({...p, menuPrice: e.target.value})) }),
         React.createElement("input", { className: "inp", placeholder: "Emoji e.g. 🍗", value: newItem.emoji, onChange: e => setNewItem(p => ({...p, emoji: e.target.value})) }),
         React.createElement("select", { className: "inp", style: { gridColumn: "span 2" }, value: newItem.category, onChange: e => setNewItem(p => ({...p, category: e.target.value})) },
           categories.map(c => React.createElement("option", { key: c, value: c }, c))
@@ -576,7 +589,8 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
                     React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 } },
                       React.createElement("input", { className: "inp", value: editData.name, onChange: e => setEditData(p => ({...p, name: e.target.value})), placeholder: "Name EN" }),
                       React.createElement("input", { className: "inp", value: editData.nameAr, onChange: e => setEditData(p => ({...p, nameAr: e.target.value})), placeholder: "الاسم AR" }),
-                      React.createElement("input", { className: "inp", type: "number", value: editData.price, onChange: e => setEditData(p => ({...p, price: e.target.value})), placeholder: "Price SR" }),
+                      React.createElement("input", { className: "inp", type: "number", value: editData.price, onChange: e => setEditData(p => ({...p, price: e.target.value})), placeholder: "App Price SR" }),
+                      React.createElement("input", { className: "inp", type: "number", value: editData.menuPrice, onChange: e => setEditData(p => ({...p, menuPrice: e.target.value})), placeholder: "Menu Price SR (opt.)", title: "Standard counter price. Leave blank to match the app price." }),
                       React.createElement("input", { className: "inp", value: editData.emoji, onChange: e => setEditData(p => ({...p, emoji: e.target.value})), placeholder: "Emoji" }),
                       branchesChecklist(editData.branches, (bs) => setEditData(p => ({...p, branches: bs})))
                     ),
@@ -625,9 +639,17 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
                       )
                     ),
                     React.createElement("div", { key: "bot", style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 } },
-                      React.createElement("span", { style: { color: "#E60000", fontWeight: 800, fontSize: 15, flexShrink: 0 } }, "SR " + item.price),
+                      React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 6, flexShrink: 0 } },
+                        React.createElement("span", { style: { color: "#E60000", fontWeight: 800, fontSize: 15 } }, "SR " + item.price),
+                        // Phase 6 — show the strikethrough menu price when it
+                        // is set higher than the app price so the owner can
+                        // sanity-check the "app savings" on the item.
+                        (Number(item.menuPrice) > 0 && Number(item.menuPrice) > Number(item.price))
+                          ? React.createElement("span", { style: { color: "#9CA3AF", fontSize: 11, fontWeight: 600, textDecoration: "line-through" } }, "SR " + item.menuPrice)
+                          : null
+                      ),
                       React.createElement("div", { className: "m-actions", style: { display: "flex", gap: 6, flexShrink: 0 } },
-                        isOwner && React.createElement("button", { onClick: () => { setEditingId(item.id); setEditData({ price: String(item.price), name: item.name, nameAr: item.nameAr || "", emoji: item.emoji || "", branches: itemBranches(item).slice(), img: item.img || "" }); }, style: { background: "#F4F5F9", border: "none", color: "#6B7280", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13 } }, "✏️"),
+                        isOwner && React.createElement("button", { onClick: () => { setEditingId(item.id); setEditData({ price: String(item.price), menuPrice: item.menuPrice ? String(item.menuPrice) : "", name: item.name, nameAr: item.nameAr || "", emoji: item.emoji || "", branches: itemBranches(item).slice(), img: item.img || "" }); }, style: { background: "#F4F5F9", border: "none", color: "#6B7280", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13 } }, "✏️"),
                         React.createElement("button", { onClick: () => toggleAvail(item.id), title: availHere ? "Turn OFF for " + (branchView === "all" ? "all branches" : branchName(isOwner ? branchView : branchScope)) : "Turn ON", style: { background: availHere ? "#ECFDF5" : "#FFF1F2", border: "none", color: availHere ? "#059669" : "#E60000", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 700 } }, availHere ? "✅" : "❌"),
                         isOwner && React.createElement("button", { onClick: () => deleteItem(item.id), style: { background: "#FFF1F2", border: "none", color: "#E60000", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13 } }, "🗑️")
                       )
