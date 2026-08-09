@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.7.0";
+const APP_VERSION = "8.8.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -3333,6 +3333,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     };
     try {
       var { initializeApp, deleteApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+      var { initializeAppCheck, ReCaptchaV3Provider } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check.js");
       var { getFirestore, doc, getDoc, setDoc, addDoc, collection, onSnapshot, updateDoc, deleteDoc, serverTimestamp, getDocs, query, where }
         = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
       var { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword, sendPasswordResetEmail, updatePassword, setPersistence, browserLocalPersistence, browserSessionPersistence }
@@ -3346,6 +3347,13 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         appId: "1:663849043584:web:b15e0a32eb9b6353830865"
       };
       var _app = initializeApp(_fbConfig);
+      // App Check (reCAPTCHA v3). Site key is public by design.
+      try {
+        initializeAppCheck(_app, {
+          provider: new ReCaptchaV3Provider("6Le9EX0tAAAAABxsStKat6oX8bqJ_ny1Pbrj93kQ"),
+          isTokenAutoRefreshEnabled: true
+        });
+      } catch(_){ /* App Check may not yet be registered in Firebase console. */ }
       var _db = getFirestore(_app);
       var _auth = getAuth(_app);
       window.Auth = {
