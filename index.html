@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.9.2";
+const APP_VERSION = "8.10.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -2698,6 +2698,11 @@ function App() {
   const [customers, setCustomers] = React.useState([]);
   const [newOrderAlert, setNewOrderAlert] = React.useState(false);
   const [orderFilter, setOrderFilter] = React.useState("all");
+  // How far back the Orders tab looks. Default "today" preserves the old
+  // daily-tickets view; the other ranges surface older orders (a stuck-in-
+  // "new" ticket from yesterday, or a customer asking about an old receipt)
+  // without leaving the tab.
+  const [dateRange, setDateRange] = React.useState("today");
   const [fbConnected, setFbConnected] = React.useState(false);
   const [bellAnim, setBellAnim] = React.useState(false);
   // Bumping this key tears down every live Firestore listener and re-subscribes.
@@ -3298,10 +3303,42 @@ function App() {
       // Tab content
       tab === "orders" && React.createElement("div", null,
         (() => {
-          const todayStr = new Date().toDateString();
-          const todayOrders = orders.filter(o => new Date(o.date).toDateString() === todayStr);
+          // Range cutoff (in ms) for the current dateRange choice. "all" keeps
+          // every order; the others slice the tail of the list.
+          const now = Date.now();
+          const rangeMs = dateRange === "today" ? null
+            : dateRange === "yesterday" ? null
+            : dateRange === "7d" ? 7  * 24 * 60 * 60 * 1000
+            : dateRange === "30d" ? 30 * 24 * 60 * 60 * 1000
+            : null;
+          const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+          const startOfYesterday = new Date(startOfToday.getTime() - 24 * 60 * 60 * 1000);
+          const todayOrders = orders.filter((o) => {
+            const t = new Date(o.date).getTime();
+            if (!isFinite(t)) return dateRange === "all";
+            if (dateRange === "all") return true;
+            if (dateRange === "today") return t >= startOfToday.getTime();
+            if (dateRange === "yesterday") return t >= startOfYesterday.getTime() && t < startOfToday.getTime();
+            if (rangeMs != null) return now - t <= rangeMs;
+            return true;
+          });
           const filteredOrders = orderFilter === "all" ? todayOrders : todayOrders.filter(o => o.status === orderFilter);
+          const rangeLabel = dateRange === "today" ? "today"
+            : dateRange === "yesterday" ? "yesterday"
+            : dateRange === "7d" ? "in the last 7 days"
+            : dateRange === "30d" ? "in the last 30 days"
+            : "at all";
           return React.createElement(React.Fragment, null,
+            React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10, overflowX: "auto", paddingBottom: 4 } },
+              [["today","Today"],["yesterday","Yesterday"],["7d","Last 7 days"],["30d","Last 30 days"],["all","All time"]].map(([k, label]) => {
+                const active = dateRange === k;
+                return React.createElement("button", {
+                  key: k,
+                  onClick: () => setDateRange(k),
+                  style: { padding: "6px 12px", borderRadius: 16, border: "1.5px solid " + (active ? "#1D4ED8" : "#EAECF2"), background: active ? "#EFF6FF" : "#fff", color: active ? "#1D4ED8" : "#6B7280", fontSize: 11, fontWeight: active ? 700 : 500, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }
+                }, label);
+              })
+            ),
             React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 14, overflowX: "auto", paddingBottom: 4 } },
               ["all","new","preparing","cooking","almost_ready","ready","done"].map(s => {
                 const count = s === "all" ? todayOrders.length : todayOrders.filter(o => o.status === s).length;
@@ -3316,7 +3353,7 @@ function App() {
             filteredOrders.length === 0
               ? React.createElement("div", { className: "card", style: { padding: 56, textAlign: "center" } },
                   React.createElement("div", { style: { fontSize: 50, marginBottom: 14 } }, "📭"),
-                  React.createElement("div", { style: { color: "#6B7280", fontSize: 14, fontWeight: 500 } }, orderFilter === "all" ? "No orders today" : "No " + orderFilter + " orders today"),
+                  React.createElement("div", { style: { color: "#6B7280", fontSize: 14, fontWeight: 500 } }, orderFilter === "all" ? "No orders " + rangeLabel : "No " + orderFilter + " orders " + rangeLabel),
                   React.createElement("div", { style: { color: "#9CA3AF", fontSize: 12, marginTop: 6 } }, "Orders appear here in real time")
                 )
               : filteredOrders.map(o => React.createElement(OrderCard, { key: o.fbId || o.orderNo, order: o, onStatusChange: handleStatusChange, onAccept: handleAcceptOrder, onDecline: handleDeclineOrder, onAssignDriver: handleAssignDriver, onOverride: isOwner ? handleOverride : undefined, isNew: o.status === "new" || o.status === "pending" }))
