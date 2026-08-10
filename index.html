@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.19.1";
+const APP_VERSION = "8.20.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -1163,6 +1163,83 @@ function InvoiceSetup({ isOwner, branches, branchScope }) {
       textRow("FOOTER LINE 1", "footerLine1", "Thank you for your order!"),
       textRow("FOOTER LINE 2", "footerLine2", "TikTok: @brustalbahr"),
       textRow("FOOTER LINE 3", "footerLine3", "Follow us for offers!")
+    ),
+
+    // ── Style engine: per-section font size + bold + italic, QR size,
+    // and the HTML-fallback base font. Values apply to both the physical
+    // ESC/POS print (via GS ! size codes + ESC E bold + ESC 4 italic)
+    // AND the Windows-driver HTML fallback (via CSS). Every change flows
+    // out on the next Save.
+    React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 4 } }, "🎨 Print styles"),
+      React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 14 } }, "Font size + bold + italic per section. Applies to thermal + browser print."),
+      // Per-section size + bold + italic table
+      (function(){
+        const sections = [
+          { id: "Header",       label: "Header (business name)",   italicKey: null },
+          { id: "Tagline",      label: "Tagline",                  italicKey: "italicTagline" },
+          { id: "BranchName",   label: "Branch name",              italicKey: null },
+          { id: "OrderNo",      label: "Order number",             italicKey: null },
+          { id: "Labels",       label: "Labels (Type/Placed/…)",   italicKey: null },
+          { id: "CustomerName", label: "Customer name",            italicKey: null },
+          { id: "ItemName",     label: "Item name",                italicKey: null },
+          { id: "ItemQty",      label: "Item qty",                 italicKey: null },
+          { id: "ItemPrice",    label: "Item price",               italicKey: null },
+          { id: "ItemNote",     label: "Item note",                italicKey: "italicNote" },
+          { id: "TotalLabel",   label: "Total row",                italicKey: null },
+          { id: "Reward",       label: "Reward code / coupon",     italicKey: null },
+          { id: "Contact",      label: "Contact block",            italicKey: null },
+          { id: "Footer",       label: "Footer",                   italicKey: "italicFooter" },
+        ];
+        const SIZE_OPTIONS = [
+          { v: "small",  l: "Small" },
+          { v: "normal", l: "Normal" },
+          { v: "tall",   l: "Tall (2× height)" },
+          { v: "big",    l: "Big (2× w×h)" },
+          { v: "huge",   l: "Huge (3× w×h)" },
+        ];
+        return React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1.4fr 1.1fr 0.55fr 0.55fr", gap: 8, alignItems: "center", fontSize: 12 } },
+          // header row
+          React.createElement("div", { style: { fontWeight: 700, color: "#6B7280" } }, "SECTION"),
+          React.createElement("div", { style: { fontWeight: 700, color: "#6B7280" } }, "SIZE"),
+          React.createElement("div", { style: { fontWeight: 700, color: "#6B7280", textAlign: "center" } }, "BOLD"),
+          React.createElement("div", { style: { fontWeight: 700, color: "#6B7280", textAlign: "center" } }, "ITALIC"),
+          ...sections.flatMap(sec => {
+            const sizeKey = "size" + sec.id;
+            const boldKey = "bold" + sec.id;
+            const italicKey = sec.italicKey;
+            return [
+              React.createElement("div", { key: sec.id + "-l", style: { color: "#1A1D27", fontWeight: 600, borderTop: "1px solid #F3F4F6", paddingTop: 6 } }, sec.label),
+              React.createElement("select", { key: sec.id + "-s", className: "inp", style: { padding: "6px 8px" }, value: effective[sizeKey] || "normal", onChange: e => setField(sizeKey, e.target.value) },
+                SIZE_OPTIONS.map(o => React.createElement("option", { key: o.v, value: o.v }, o.l))),
+              React.createElement("div", { key: sec.id + "-b", style: { textAlign: "center" } },
+                React.createElement("input", { type: "checkbox", checked: effective[boldKey] !== false, onChange: e => setField(boldKey, e.target.checked), style: { width: 18, height: 18 } })),
+              italicKey
+                ? React.createElement("div", { key: sec.id + "-i", style: { textAlign: "center" } },
+                    React.createElement("input", { type: "checkbox", checked: !!effective[italicKey], onChange: e => setField(italicKey, e.target.checked), style: { width: 18, height: 18 } }))
+                : React.createElement("div", { key: sec.id + "-i", style: { textAlign: "center", color: "#CBD5E1" } }, "—")
+            ];
+          })
+        );
+      })(),
+      // Dials at the bottom of the card
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 16, paddingTop: 12, borderTop: "1px solid #F3F4F6" } },
+        React.createElement("div", null,
+          React.createElement("label", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700, display: "block", marginBottom: 5 } }, "QR SIZE (thermal 1–16)"),
+          React.createElement("input", { className: "inp", type: "number", min: 1, max: 16, value: effective.qrSize == null ? 8 : effective.qrSize, onChange: e => setField("qrSize", Math.max(1, Math.min(16, Number(e.target.value) || 8))) })
+        ),
+        React.createElement("div", null,
+          React.createElement("label", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700, display: "block", marginBottom: 5 } }, "QR WIDTH (browser, mm)"),
+          React.createElement("input", { className: "inp", type: "number", min: 20, max: 70, value: effective.qrHtmlWidthMm == null ? 44 : effective.qrHtmlWidthMm, onChange: e => setField("qrHtmlWidthMm", Math.max(20, Math.min(70, Number(e.target.value) || 44))) })
+        ),
+        React.createElement("div", null,
+          React.createElement("label", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700, display: "block", marginBottom: 5 } }, "BROWSER BASE FONT (px)"),
+          React.createElement("input", { className: "inp", type: "number", min: 9, max: 30, value: effective.fontHtmlPx == null ? 15 : effective.fontHtmlPx, onChange: e => setField("fontHtmlPx", Math.max(9, Math.min(30, Number(e.target.value) || 15))) })
+        )
+      ),
+      React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", marginTop: 10, lineHeight: 1.55 } },
+        "Thermal-print size is a hardware character multiplier (Normal / 2× tall / 2× / 3×). Browser fallback scales CSS from the base font. Italic on thermal uses ESC 4 — supported by newer Xprinter / Bixolon, ignored by older bitmap heads."
+      )
     ),
 
     // Paper geometry
@@ -4531,7 +4608,50 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       showReadyBy: true,
       showLoyaltyBalance: true,     // print the customer's running points balance
       showStatus: true,             // include current order status (useful on reprints)
-      showBranchContact: true       // print branch name + branch phone up top
+      showBranchContact: true,      // print branch name + branch phone up top
+
+      // ── Style engine — per-section knobs owner can tune from the admin.
+      // Sizes translate to ESC/POS `GS ! n` codes on the thermal path and
+      // to CSS font-size + font-weight on the Windows-driver fallback.
+      // Valid size values: 'small' | 'normal' | 'tall' | 'big' | 'huge'.
+      //   small  = normal char (smaller pt in HTML)
+      //   normal = default char
+      //   tall   = 2x height, same width (kitchen-readable line)
+      //   big    = 2x width + 2x height (order#, prominent)
+      //   huge   = 3x width + 3x height (loudest — hardware cap)
+      qrSize: 8,                    // ESC/POS module dot size 1..16 (≈ 8 → ~45mm on 80mm paper)
+      qrHtmlWidthMm: 44,            // HTML fallback QR width in mm
+      fontHtmlPx: 15,               // HTML base font size (all `size` multipliers scale from this)
+      // Per-section sizes
+      sizeHeader: 'big',
+      sizeTagline: 'normal',
+      sizeBranchName: 'normal',
+      sizeOrderNo: 'huge',
+      sizeLabels: 'normal',         // "Type:", "Placed:", "Ready:" etc.
+      sizeCustomerName: 'tall',
+      sizeItemName: 'tall',
+      sizeItemQty: 'tall',
+      sizeItemPrice: 'normal',
+      sizeItemNote: 'tall',
+      sizeTotalLabel: 'tall',
+      sizeReward: 'tall',
+      sizeContact: 'normal',
+      sizeFooter: 'normal',
+      // Per-section bold
+      boldHeader: true,
+      boldOrderNo: true,
+      boldLabels: true,
+      boldCustomerName: true,
+      boldItemName: true,
+      boldTotal: true,
+      boldReward: true,
+      boldFooter: true,
+      // Per-section italic (ESC/POS uses ESC 4 — best-effort;
+      // most bitmap-font printers ignore it. HTML always honors it.)
+      italicTagline: false,
+      italicFooter: false,
+      italicNote: true,
+      italicPromo: false
     };
     var INVOICE_CFG = { global: {}, byBranch: {} };
     function resolveConfig(branchId) {
@@ -4599,23 +4719,57 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var ESC  = "\x1B";
       var GS   = "\x1D";
       var LF   = "\n";
-      var BOLD_ON   = ESC + "E\x01";
-      var BOLD_OFF  = ESC + "E\x00";
-      var CENTER    = ESC + "a\x01";
-      var LEFT      = ESC + "a\x00";
+      var BOLD_ON    = ESC + "E\x01";
+      var BOLD_OFF   = ESC + "E\x00";
+      var ITALIC_ON  = ESC + "4";        // ESC 4 — supported on some printers only
+      var ITALIC_OFF = ESC + "5";
+      var CENTER     = ESC + "a\x01";
+      var LEFT       = ESC + "a\x00";
       // GS ! n — bits 0-3 width multiplier, bits 4-7 height multiplier.
       // NORMAL = 1x1, TALL = 1x2 (double height, char width unchanged so pad()
-      // math still lines up), BIG = 2x2. TALL is the everyday emphasis size
-      // for anything the cook reads at arm's length; BIG is reserved for the
-      // order number so the runner reads it across the counter.
-      var NORMAL    = GS  + "!\x00";
-      var TALL      = GS  + "!\x10";
-      var BIG       = GS  + "!\x11";
-      var CUT       = GS  + "V\x42\x00";
+      // math still lines up), BIG = 2x2, HUGE = 3x3 (loudest most printers do).
+      var NORMAL     = GS  + "!\x00";
+      var SMALL      = GS  + "!\x00";    // no separate hardware small — same as NORMAL
+      var TALL       = GS  + "!\x10";
+      var BIG        = GS  + "!\x11";
+      var HUGE       = GS  + "!\x22";    // 3x width + 3x height
+      var CUT        = GS  + "V\x42\x00";
+
+      // ── Style engine ─────────────────────────────────────────
+      // Named sections map to a size code + bold + italic sourced from the
+      // invoice config so the admin panel can retune them without a code
+      // change. `open(name)` returns the escape sequence to enter a style;
+      // `close(name)` returns the sequence to reset. Wrap short strings
+      // with `w(name, text)` for the common one-line case.
+      function sizeToCode(size) {
+        switch (String(size || "normal").toLowerCase()) {
+          case "small":  return SMALL;
+          case "tall":   return TALL;
+          case "big":    return BIG;
+          case "huge":   return HUGE;
+          case "normal":
+          default:       return NORMAL;
+        }
+      }
+      function open(section) {
+        var sizeCode = sizeToCode(C["size" + section]);
+        var bold = C["bold" + section] === true;
+        var italic = C["italic" + section] === true;
+        return sizeCode + (italic ? ITALIC_ON : "") + (bold ? BOLD_ON : "");
+      }
+      function close(section) {
+        var bold = C["bold" + section] === true;
+        var italic = C["italic" + section] === true;
+        return (bold ? BOLD_OFF : "") + (italic ? ITALIC_OFF : "") + NORMAL;
+      }
+      function w(section, text) { return open(section) + text + close(section); }
 
       var W = Math.max(24, Math.min(64, Number(C.paperWidth) || 32));
       function line(ch) { return ch.repeat(W) + LF; }
       function pad(l, r) { var g = W - l.length - r.length; if (g < 1) g = 1; return l + " ".repeat(g) + r; }
+      // QR module size honors the config so the admin can shrink/grow the
+      // scannable block from the UI. Clamped inside escposQR.
+      var QR_SIZE = Number(C.qrSize) || 8;
 
       // Prefer the order's original createdAt so a reprint shows when the
       // customer actually placed the order, not when the paper came out.
@@ -4654,11 +4808,13 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var subtotal = (order.subtotal != null ? Number(order.subtotal) : null);
       var discount = (order.discount != null ? Number(order.discount) : 0);
 
-      // Header (normal font, still centered + bold for readability).
+      // Header — every section pulls its size + bold + italic from the
+      // style engine so an owner tweak in the Invoice tab lands on the
+      // next receipt with no code change.
       lines.push(NORMAL);
-      lines.push(CENTER + BOLD_ON + stripEmoji((C.header || "").toUpperCase()) + BOLD_OFF + LF);
-      if (C.tagline) lines.push(CENTER + stripEmoji(C.tagline) + LF);
-      if (C.showBranchName && branchName) lines.push(CENTER + stripEmoji(branchName + (C.branchSuffix || "")) + LF);
+      lines.push(CENTER + w("Header", stripEmoji((C.header || "").toUpperCase())) + LF);
+      if (C.tagline) lines.push(CENTER + w("Tagline", stripEmoji(C.tagline)) + LF);
+      if (C.showBranchName && branchName) lines.push(CENTER + w("BranchName", stripEmoji(branchName + (C.branchSuffix || ""))) + LF);
       lines.push(LEFT + line("="));
 
       // Header contact — printed near the top so the kitchen line can call
@@ -4668,29 +4824,27 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       }
 
       // Order details. Order number gets the biggest text on the paper —
-      // BIG (2x width + 2x height) means each char is 24 dots, so line width
-      // in chars halves; center-alignment handles the layout without needing
-      // pad() to know about it.
+      // sized via the OrderNo style so admin can dial it up/down.
       if (C.showOrderNo) {
-        lines.push(CENTER + BIG + "#" + stripEmoji(order.orderNo) + LF + NORMAL + LEFT);
+        lines.push(CENTER + w("OrderNo", "#" + stripEmoji(order.orderNo)) + LF + LEFT);
       }
-      if (C.showType) lines.push(BOLD_ON + "Type:" + BOLD_OFF + "   " + (order.orderType === "pickup" ? "Pickup" : "Delivery") + LF);
-      if (C.showStatus && order.status) lines.push(BOLD_ON + "Status:" + BOLD_OFF + " " + stripEmoji(order.status) + LF);
-      if (C.showDate) lines.push(BOLD_ON + "Placed:" + BOLD_OFF + " " + dateStr + " " + timeStr + LF);
-      if (C.showReadyBy) lines.push(BOLD_ON + "Ready:" + BOLD_OFF + "  " + readyStr + " (~" + prepMin + " min)" + LF);
-      if (order.pickupTime) lines.push(BOLD_ON + "Pickup:" + BOLD_OFF + " " + stripEmoji(order.pickupTime) + LF);
+      if (C.showType) lines.push(w("Labels", "Type:") + "   " + (order.orderType === "pickup" ? "Pickup" : "Delivery") + LF);
+      if (C.showStatus && order.status) lines.push(w("Labels", "Status:") + " " + stripEmoji(order.status) + LF);
+      if (C.showDate) lines.push(w("Labels", "Placed:") + " " + dateStr + " " + timeStr + LF);
+      if (C.showReadyBy) lines.push(w("Labels", "Ready:") + "  " + readyStr + " (~" + prepMin + " min)" + LF);
+      if (order.pickupTime) lines.push(w("Labels", "Pickup:") + " " + stripEmoji(order.pickupTime) + LF);
       lines.push(LEFT + line("-"));
 
       // Customer
       if (C.showCustomer) {
-        lines.push(BOLD_ON + "Customer" + BOLD_OFF + LF);
-        // Name on its own TALL line — kitchen calls it out, so it needs to be
-        // readable from across the pass.
-        lines.push(TALL + BOLD_ON + stripEmoji(order.userName || "Customer") + BOLD_OFF + LF + NORMAL);
-        if (C.showPhone && order.userPhone) lines.push(BOLD_ON + "Phone:" + BOLD_OFF + "  " + stripEmoji(order.userPhone) + LF);
-        if (C.showPayment) lines.push(BOLD_ON + "Pay:" + BOLD_OFF + "    " + stripEmoji(order.paymentMethod || "cash") + LF);
+        lines.push(w("Labels", "Customer") + LF);
+        // Name on its own line — style-configurable so the kitchen can size
+        // it up when the pass is far from the printer.
+        lines.push(w("CustomerName", stripEmoji(order.userName || "Customer")) + LF);
+        if (C.showPhone && order.userPhone) lines.push(w("Labels", "Phone:") + "  " + stripEmoji(order.userPhone) + LF);
+        if (C.showPayment) lines.push(w("Labels", "Pay:") + "    " + stripEmoji(order.paymentMethod || "cash") + LF);
         if (C.showLocation && order.orderType === "delivery" && order.locationLink) {
-          lines.push(BOLD_ON + "Location:" + BOLD_OFF + LF);
+          lines.push(w("Labels", "Location:") + LF);
           lines.push(order.locationLink.substring(0, W) + LF);
         }
         lines.push(LEFT + line("-"));
@@ -4711,7 +4865,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
 
       // Items
       if (C.showItems) {
-        lines.push(CENTER + BOLD_ON + "ITEMS" + BOLD_OFF + LF);
+        lines.push(CENTER + w("Labels", "ITEMS") + LF);
         lines.push(line("-"));
         (order.items || []).forEach(function (item) {
           var name = stripEmoji(item.name || "");
@@ -4720,13 +4874,12 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
           // for any per-line comp) and fall back to price*qty for legacy rows.
           var lineTotal = (typeof item.lineTotal === "number") ? item.lineTotal : (item.price || 0) * qty;
           var price = "SR " + Number(lineTotal).toFixed(2);
-          // Name, qty and any customer note in TALL so the cook can read the
-          // three things they actually build off at a glance; price stays
-          // normal below, right-aligned via pad().
-          lines.push(TALL + BOLD_ON + name + BOLD_OFF + LF + NORMAL);
+          // Name + qty at the ItemName/ItemQty sizes, note at ItemNote size,
+          // price at ItemPrice — all four are independently configurable.
+          lines.push(w("ItemName", name) + LF);
           if (C.showItemArabic && item.nameAr) lines.push("  " + stripEmoji(item.nameAr) + LF);
-          lines.push(TALL + BOLD_ON + "  x" + qty + BOLD_OFF + LF + NORMAL);
-          lines.push(pad("", price) + LF);
+          lines.push(w("ItemQty", "  x" + qty) + LF);
+          lines.push(open("ItemPrice") + pad("", price) + close("ItemPrice") + LF);
           // Menu-vs-app "was" annotation when the counter price is set higher
           // than the app price — Phase 6 lineMenuValue tells us what the
           // walk-in customer would have paid at the counter.
@@ -4735,7 +4888,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
           if (menuVal > lineTotal + 0.005) {
             lines.push(pad("", "(was SR " + Number(menuVal).toFixed(2) + ")") + LF);
           }
-          if (item.note) lines.push(TALL + BOLD_ON + "  >> " + stripEmoji(item.note) + BOLD_OFF + LF + NORMAL);
+          if (item.note) lines.push(w("ItemNote", "  >> " + stripEmoji(item.note)) + LF);
         });
         lines.push(line("-"));
         if (subtotal != null) lines.push(pad("Subtotal", "SR " + subtotal.toFixed(2)) + LF);
@@ -4753,7 +4906,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         }
         // TALL keeps normal character width, so pad()'s alignment survives
         // even though every char is now twice as tall.
-        lines.push(TALL + BOLD_ON + pad("TOTAL", "SR " + total.toFixed(2)) + BOLD_OFF + LF + NORMAL);
+        lines.push(open("TotalLabel") + pad("TOTAL", "SR " + total.toFixed(2)) + close("TotalLabel") + LF);
         var inclVat = order.vat || Math.round(total / 1.15 * 0.15 * 100) / 100;
         lines.push(CENTER + "(Prices incl. 15% VAT: SR " + inclVat.toFixed(2) + ")" + LF);
         lines.push(line("="));
@@ -4766,30 +4919,30 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       // customers can scan-to-redeem at their next visit; the code below it
       // is a manual fallback for damaged prints.
       if (order.reward && order.reward.code) {
-        lines.push(CENTER + BOLD_ON + "REWARD CODE" + BOLD_OFF + LF);
-        lines.push(CENTER + escposQR(order.reward.code, 8, 50) + LF);
-        lines.push(CENTER + TALL + BOLD_ON + stripEmoji(order.reward.code) + BOLD_OFF + LF + NORMAL);
+        lines.push(CENTER + w("Labels", "REWARD CODE") + LF);
+        lines.push(CENTER + escposQR(order.reward.code, QR_SIZE, 50) + LF);
+        lines.push(CENTER + w("Reward", stripEmoji(order.reward.code)) + LF);
         if (order.reward.label) lines.push(CENTER + stripEmoji(order.reward.label) + LF);
         lines.push(CENTER + "Scan to redeem" + LF);
         lines.push(LEFT + line("-"));
       } else if (order.couponCode) {
         // Coupon applied to this order — reprint it as a scannable QR so the
         // counter can verify at hand-off without the customer typing the code.
-        lines.push(CENTER + BOLD_ON + "COUPON" + BOLD_OFF + LF);
-        lines.push(CENTER + escposQR(order.couponCode, 7, 50) + LF);
-        lines.push(CENTER + TALL + BOLD_ON + stripEmoji(order.couponCode) + BOLD_OFF + LF + NORMAL);
+        lines.push(CENTER + w("Labels", "COUPON") + LF);
+        lines.push(CENTER + escposQR(order.couponCode, Math.max(1, QR_SIZE - 1), 50) + LF);
+        lines.push(CENTER + w("Reward", stripEmoji(order.couponCode)) + LF);
         lines.push(LEFT + line("-"));
       }
 
       // Order-level note (customer's "any special request" from checkout)
       if (order.note) {
-        lines.push(BOLD_ON + "Note:" + BOLD_OFF + " " + stripEmoji(order.note) + LF);
+        lines.push(w("Labels", "Note:") + " " + (C.italicNote ? ITALIC_ON : "") + stripEmoji(order.note) + (C.italicNote ? ITALIC_OFF : "") + LF);
         lines.push(LEFT + line("-"));
       }
 
       // Loyalty — earned this order + total running balance from the customer doc.
       if (C.showLoyalty) {
-        lines.push(CENTER + BOLD_ON + stripEmoji(C.loyaltyLabel || "Loyalty Points") + BOLD_OFF + LF);
+        lines.push(CENTER + w("Labels", stripEmoji(C.loyaltyLabel || "Loyalty Points")) + LF);
         lines.push(CENTER + "Earned this order: +" + pts + " pts" + LF);
         if (C.showLoyaltyBalance && order.loyaltyBalance != null) {
           lines.push(CENTER + "Total balance: " + Number(order.loyaltyBalance) + " pts" + LF);
@@ -4798,24 +4951,27 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       }
 
       // Tax IDs
-      if (C.showTaxNumber && C.taxNumber) lines.push(BOLD_ON + "Tax#:" + BOLD_OFF + " " + stripEmoji(C.taxNumber) + LF);
-      if (C.showVatNumber && C.vatNumber) lines.push(BOLD_ON + "VAT#:" + BOLD_OFF + " " + stripEmoji(C.vatNumber) + LF);
+      if (C.showTaxNumber && C.taxNumber) lines.push(w("Labels", "Tax#:") + " " + stripEmoji(C.taxNumber) + LF);
+      if (C.showVatNumber && C.vatNumber) lines.push(w("Labels", "VAT#:") + " " + stripEmoji(C.vatNumber) + LF);
       if ((C.showTaxNumber && C.taxNumber) || (C.showVatNumber && C.vatNumber)) lines.push(LEFT + line("-"));
 
       // Contact block
       if (C.showBranchPhones) {
-        lines.push(CENTER + BOLD_ON + stripEmoji(C.contactHeader || "Contact Us") + BOLD_OFF + LF);
-        (C.contactLines || []).forEach(function (l) { if (l) lines.push(CENTER + stripEmoji(l) + LF); });
+        lines.push(CENTER + w("Contact", stripEmoji(C.contactHeader || "Contact Us")) + LF);
+        (C.contactLines || []).forEach(function (l) { if (l) lines.push(CENTER + open("Contact") + stripEmoji(l) + close("Contact") + LF); });
         lines.push(LEFT + line("="));
       }
 
-      // Promo
-      if (C.promoLine) { lines.push(CENTER + stripEmoji(C.promoLine) + LF); lines.push(LEFT + line("-")); }
+      // Promo (italic-configurable)
+      if (C.promoLine) {
+        lines.push(CENTER + (C.italicPromo ? ITALIC_ON : "") + stripEmoji(C.promoLine) + (C.italicPromo ? ITALIC_OFF : "") + LF);
+        lines.push(LEFT + line("-"));
+      }
 
       // Footer
-      if (C.footerLine1) lines.push(CENTER + BOLD_ON + stripEmoji(C.footerLine1) + BOLD_OFF + LF);
-      if (C.footerLine2) lines.push(CENTER + stripEmoji(C.footerLine2) + LF);
-      if (C.footerLine3) lines.push(CENTER + stripEmoji(C.footerLine3) + LF);
+      if (C.footerLine1) lines.push(CENTER + w("Footer", stripEmoji(C.footerLine1)) + LF);
+      if (C.footerLine2) lines.push(CENTER + open("Footer") + stripEmoji(C.footerLine2) + close("Footer") + LF);
+      if (C.footerLine3) lines.push(CENTER + open("Footer") + stripEmoji(C.footerLine3) + close("Footer") + LF);
 
       var feed = Math.max(1, Number(C.feedLines) || 3);
       lines.push(LF.repeat(feed));
@@ -4860,19 +5016,40 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var total = Number(order.total) || 0;
       var pts = total >= 500 ? 35 : total >= 250 ? 20 : total >= 100 ? 10 : 5;
       function esc(s){ return stripEmoji(String(s == null ? "" : s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+      // Same style engine as the ESC/POS path — CSS class picked from
+      // C.size<Section> + C.bold<Section> + C.italic<Section>. Every
+      // section span is emitted via cls(name) so the admin's slider
+      // changes land on-paper without touching this file.
+      var basePx = Math.max(9, Math.min(30, Number(C.fontHtmlPx) || 15));
+      var SIZE_MAP = { small: 0.85, normal: 1.0, tall: 1.2, big: 1.5, huge: 2.0 };
+      function pxFor(size) { return Math.round((SIZE_MAP[String(size||"normal").toLowerCase()] || 1) * basePx); }
+      function cls(section) {
+        var sz = pxFor(C["size" + section]);
+        var bold = C["bold" + section] === true;
+        var italic = C["italic" + section] === true;
+        return " style=\"font-size:" + sz + "px;font-weight:" + (bold ? 900 : 700) + ";font-style:" + (italic ? "italic" : "normal") + "\"";
+      }
+      // Convenience — a full <span> wrapping a section's text.
+      function s(section, text) { return "<span" + cls(section) + ">" + text + "</span>"; }
+      var qrWidthMm = Math.max(20, Math.min(70, Number(C.qrHtmlWidthMm) || 44));
+
       var itemRows = (order.items || []).map(function(it){
-        var line = (it.name || "") + (C.showItemArabic && it.nameAr ? " / " + it.nameAr : "");
-        var right = "SR " + ((it.price || 0) * (it.qty || 1)).toFixed(2);
-        var noteHTML = it.note ? "<div class='q' style='font-weight:800;color:#000;font-style:italic'>&gt;&gt; " + esc(it.note) + "</div>" : "";
-        return "<tr><td class='n'>" + esc(line) + "<div class='q'>x" + (it.qty || 1) + "</div>" + noteHTML + "</td><td class='p'>" + esc(right) + "</td></tr>";
+        var qty = it.qty || 1;
+        var lineTotal = (typeof it.lineTotal === "number") ? it.lineTotal : (it.price || 0) * qty;
+        var right = "SR " + Number(lineTotal).toFixed(2);
+        var arLine = (C.showItemArabic && it.nameAr) ? "<div style='font-size:" + Math.round(basePx*0.85) + "px'>" + esc(it.nameAr) + "</div>" : "";
+        var noteHTML = it.note ? "<div" + cls("ItemNote") + ">&gt;&gt; " + esc(it.note) + "</div>" : "";
+        return "<tr>" +
+          "<td class='n'>" + s("ItemName", esc(it.name || "")) + arLine + "<div" + cls("ItemQty") + ">x" + qty + "</div>" + noteHTML + "</td>" +
+          "<td class='p'>" + s("ItemPrice", esc(right)) + "</td>" +
+          "</tr>";
       }).join("");
 
-      var contactHTML = (C.showBranchPhones ? (C.contactLines || []).filter(Boolean).map(function(l){ return "<div>" + esc(l) + "</div>"; }).join("") : "");
-      // 80mm receipt = 72mm printable. Page-break-after ensures the driver
-      // treats each ticket as its own job, which triggers auto-cut.
-      // Reward / coupon QR — rendered as inline SVG so no network request
-      // is needed at print time. Prefer the opaque reward token over the
-      // coupon code (rewards are single-use, coupons may be reusable).
+      var contactHTML = (C.showBranchPhones ? (C.contactLines || []).filter(Boolean).map(function(l){ return "<div" + cls("Contact") + ">" + esc(l) + "</div>"; }).join("") : "");
+
+      // Reward / coupon QR — inline SVG so no network request is needed.
+      // Width honors qrHtmlWidthMm so the admin can shrink or grow it.
       var qrPayload = "", qrLabel = "", qrHeading = "";
       if (order.reward && order.reward.code) {
         qrHeading = "REWARD CODE";
@@ -4886,70 +5063,69 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var qrHTML = "";
       if (qrPayload) {
         var svg = qrSVG(qrPayload, 180);
-        qrHTML = "<div class='c b' style='margin-top:6px'>" + esc(qrHeading) + "</div>" +
-                 "<div class='c qrbox'>" + (svg || "") + "</div>" +
-                 "<div class='c b big'>" + esc(qrPayload) + "</div>" +
-                 "<div class='c sm'>" + esc(qrLabel) + "</div><hr/>";
+        qrHTML = "<div class='c' style='margin-top:6px'>" + s("Labels", esc(qrHeading)) + "</div>" +
+                 "<div class='c qrbox' style='width:" + qrWidthMm + "mm'>" + (svg || "") + "</div>" +
+                 "<div class='c'>" + s("Reward", esc(qrPayload)) + "</div>" +
+                 "<div class='c' style='font-size:" + Math.round(basePx*0.85) + "px'>" + esc(qrLabel) + "</div><hr/>";
       }
 
       // Receipt-style monospace matches the thermal printer's bitmap font.
-      // VT323 gives that unmistakable receipt look on-screen and in the
-      // Windows fallback print; Courier Prime / New / Consolas step in when
-      // the Google Fonts request fails (offline / firewalled).
+      // VT323 gives the unmistakable receipt look; Courier Prime / New /
+      // Consolas step in when the Google Fonts request fails (offline).
       return "<!doctype html><html><head><meta charset='utf-8'/><title>Receipt #" + esc(order.orderNo) + "</title>" +
         "<link rel='preconnect' href='https://fonts.googleapis.com'/>" +
         "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin/>" +
         "<link href='https://fonts.googleapis.com/css2?family=VT323&family=Courier+Prime:wght@400;700&display=swap' rel='stylesheet'/>" +
         "<style>" +
         "@page{size:72mm auto;margin:0}" +
-        "html,body{margin:0;padding:0;background:#fff;color:#000;font-family:'VT323','Courier Prime','Courier New','Consolas',monospace;font-size:15px;line-height:1.15;width:72mm;font-weight:700;-webkit-font-smoothing:none;font-smooth:never}" +
+        "html,body{margin:0;padding:0;background:#fff;color:#000;font-family:'VT323','Courier Prime','Courier New','Consolas',monospace;font-size:" + basePx + "px;line-height:1.15;width:72mm;font-weight:700;-webkit-font-smoothing:none;font-smooth:never}" +
         ".r{padding:6mm 4mm}" +
-        ".c{text-align:center}.b{font-weight:900}.big{font-size:17px}.sm{font-size:13px}" +
+        ".c{text-align:center}" +
         "hr{border:none;border-top:1px dashed #000;margin:5px 0}.dbl{border-top:2px solid #000}" +
         "table{width:100%;border-collapse:collapse}td{vertical-align:top;padding:2px 0}" +
-        ".n{width:70%}.p{width:30%;text-align:right;white-space:nowrap}.q{color:#000;font-size:13px;margin-top:1px}" +
-        ".row{display:flex;justify-content:space-between}" +
-        ".qrbox{margin:4px auto;width:44mm}.qrbox svg{width:100%;height:auto;display:block}" +
+        ".n{width:70%}.p{width:30%;text-align:right;white-space:nowrap}" +
+        ".row{display:flex;justify-content:space-between;align-items:baseline}" +
+        ".qrbox{margin:4px auto}.qrbox svg{width:100%;height:auto;display:block}" +
         ".pagecut{page-break-after:always}" +
         "</style></head><body><div class='r'>" +
-          "<div class='c b big'>" + esc((C.header || "").toUpperCase()) + "</div>" +
-          (C.tagline ? "<div class='c sm'>" + esc(C.tagline) + "</div>" : "") +
-          (C.showBranchName && branchName ? "<div class='c'>" + esc(branchName + (C.branchSuffix || "")) + "</div>" : "") +
-          (C.showBranchContact && branchPhone ? "<div class='c sm'>Tel " + esc(branchPhone) + "</div>" : "") +
+          "<div class='c'>" + s("Header", esc((C.header || "").toUpperCase())) + "</div>" +
+          (C.tagline ? "<div class='c'>" + s("Tagline", esc(C.tagline)) + "</div>" : "") +
+          (C.showBranchName && branchName ? "<div class='c'>" + s("BranchName", esc(branchName + (C.branchSuffix || ""))) + "</div>" : "") +
+          (C.showBranchContact && branchPhone ? "<div class='c' style='font-size:" + Math.round(basePx*0.85) + "px'>Tel " + esc(branchPhone) + "</div>" : "") +
           "<hr class='dbl'/>" +
-          (C.showOrderNo ? "<div class='row'><span class='b'>Order</span><span>#" + esc(order.orderNo) + "</span></div>" : "") +
-          (C.showType ? "<div class='row'><span class='b'>Type</span><span>" + esc(order.orderType === "pickup" ? "Pickup" : "Delivery") + "</span></div>" : "") +
-          (C.showStatus && order.status ? "<div class='row'><span class='b'>Status</span><span>" + esc(order.status) + "</span></div>" : "") +
-          (C.showDate ? "<div class='row'><span class='b'>Placed</span><span>" + esc(when) + "</span></div>" : "") +
-          (C.showReadyBy ? "<div class='row'><span class='b'>Ready</span><span>" + esc(readyBy) + " (~" + prepMin + " min)</span></div>" : "") +
-          (order.pickupTime ? "<div class='row'><span class='b'>Pickup</span><span>" + esc(order.pickupTime) + "</span></div>" : "") +
+          (C.showOrderNo ? "<div class='c'>" + s("OrderNo", "#" + esc(order.orderNo)) + "</div>" : "") +
+          (C.showType ? "<div class='row'>" + s("Labels", "Type") + "<span>" + esc(order.orderType === "pickup" ? "Pickup" : "Delivery") + "</span></div>" : "") +
+          (C.showStatus && order.status ? "<div class='row'>" + s("Labels", "Status") + "<span>" + esc(order.status) + "</span></div>" : "") +
+          (C.showDate ? "<div class='row'>" + s("Labels", "Placed") + "<span>" + esc(when) + "</span></div>" : "") +
+          (C.showReadyBy ? "<div class='row'>" + s("Labels", "Ready") + "<span>" + esc(readyBy) + " (~" + prepMin + " min)</span></div>" : "") +
+          (order.pickupTime ? "<div class='row'>" + s("Labels", "Pickup") + "<span>" + esc(order.pickupTime) + "</span></div>" : "") +
           "<hr/>" +
-          (C.showCustomer ? "<div class='b'>Customer</div>" +
-            "<div class='row'><span>Name</span><span>" + esc(order.userName || "Customer") + "</span></div>" +
-            (C.showPhone && order.userPhone ? "<div class='row'><span>Phone</span><span>" + esc(order.userPhone) + "</span></div>" : "") +
-            (C.showPayment ? "<div class='row'><span>Pay</span><span>" + esc(order.paymentMethod || "cash") + "</span></div>" : "") +
-            (C.showLocation && order.orderType === "delivery" && order.locationLink ? "<div class='sm'>" + esc(order.locationLink) + "</div>" : "") +
+          (C.showCustomer ? "<div>" + s("Labels", "Customer") + "</div>" +
+            "<div class='c'>" + s("CustomerName", esc(order.userName || "Customer")) + "</div>" +
+            (C.showPhone && order.userPhone ? "<div class='row'>" + s("Labels", "Phone") + "<span>" + esc(order.userPhone) + "</span></div>" : "") +
+            (C.showPayment ? "<div class='row'>" + s("Labels", "Pay") + "<span>" + esc(order.paymentMethod || "cash") + "</span></div>" : "") +
+            (C.showLocation && order.orderType === "delivery" && order.locationLink ? "<div style='font-size:" + Math.round(basePx*0.85) + "px'>" + esc(order.locationLink) + "</div>" : "") +
             "<hr/>" : "") +
-          (C.showItems ? "<div class='c b'>ITEMS</div><hr/><table>" + itemRows + "</table><hr/>" +
+          (C.showItems ? "<div class='c'>" + s("Labels", "ITEMS") + "</div><hr/><table>" + itemRows + "</table><hr/>" +
             (order.subtotal != null ? "<div class='row'><span>Subtotal</span><span>SR " + Number(order.subtotal).toFixed(2) + "</span></div>" : "") +
             (order.platformFee ? "<div class='row'><span>Platform Fee</span><span>SR " + Number(order.platformFee).toFixed(2) + "</span></div>" : "") +
             (order.deliveryFee ? "<div class='row'><span>Delivery Fee</span><span>SR " + Number(order.deliveryFee).toFixed(2) + "</span></div>" : "") +
             (order.discount ? "<div class='row'><span>Discount</span><span>-SR " + Number(order.discount).toFixed(2) + "</span></div>" : "") +
             (order.couponCode ? "<div class='row'><span>Coupon</span><span>" + esc(order.couponCode) + "</span></div>" : "") +
-            "<div class='row b big'><span>TOTAL</span><span>SR " + total.toFixed(2) + "</span></div>" +
-            "<div class='c sm'>(Prices incl. 15% VAT: SR " + (order.vat || Math.round(total / 1.15 * 0.15 * 100) / 100).toFixed(2) + ")</div><hr class='dbl'/>" : "") +
-          (order.note ? "<div><span class='b'>Note:</span> " + esc(order.note) + "</div><hr/>" : "") +
+            "<div class='row'>" + s("TotalLabel", "TOTAL") + s("TotalLabel", "SR " + total.toFixed(2)) + "</div>" +
+            "<div class='c' style='font-size:" + Math.round(basePx*0.85) + "px'>(Prices incl. 15% VAT: SR " + (order.vat || Math.round(total / 1.15 * 0.15 * 100) / 100).toFixed(2) + ")</div><hr class='dbl'/>" : "") +
+          (order.note ? "<div>" + s("Labels", "Note:") + " <span" + cls("ItemNote") + ">" + esc(order.note) + "</span></div><hr/>" : "") +
           qrHTML +
-          (C.showLoyalty ? "<div class='c b'>" + esc(C.loyaltyLabel || "Loyalty Points") + "</div><div class='c'>Earned this order: +" + pts + " pts</div>" +
+          (C.showLoyalty ? "<div class='c'>" + s("Labels", esc(C.loyaltyLabel || "Loyalty Points")) + "</div><div class='c'>Earned this order: +" + pts + " pts</div>" +
             (C.showLoyaltyBalance && order.loyaltyBalance != null ? "<div class='c'>Total balance: " + Number(order.loyaltyBalance) + " pts</div>" : "") +
             "<hr/>" : "") +
-          ((C.showTaxNumber && C.taxNumber) ? "<div class='row'><span class='b'>Tax#</span><span>" + esc(C.taxNumber) + "</span></div>" : "") +
-          ((C.showVatNumber && C.vatNumber) ? "<div class='row'><span class='b'>VAT#</span><span>" + esc(C.vatNumber) + "</span></div>" : "") +
-          (contactHTML ? "<div class='c b' style='margin-top:6px'>" + esc(C.contactHeader || "Contact Us") + "</div><div class='c sm'>" + contactHTML + "</div><hr class='dbl'/>" : "") +
-          (C.promoLine ? "<div class='c sm'>" + esc(C.promoLine) + "</div><hr/>" : "") +
-          (C.footerLine1 ? "<div class='c b'>" + esc(C.footerLine1) + "</div>" : "") +
-          (C.footerLine2 ? "<div class='c sm'>" + esc(C.footerLine2) + "</div>" : "") +
-          (C.footerLine3 ? "<div class='c sm'>" + esc(C.footerLine3) + "</div>" : "") +
+          ((C.showTaxNumber && C.taxNumber) ? "<div class='row'>" + s("Labels", "Tax#") + "<span>" + esc(C.taxNumber) + "</span></div>" : "") +
+          ((C.showVatNumber && C.vatNumber) ? "<div class='row'>" + s("Labels", "VAT#") + "<span>" + esc(C.vatNumber) + "</span></div>" : "") +
+          (contactHTML ? "<div class='c' style='margin-top:6px'>" + s("Labels", esc(C.contactHeader || "Contact Us")) + "</div><div class='c'>" + contactHTML + "</div><hr class='dbl'/>" : "") +
+          (C.promoLine ? "<div class='c'><span style='font-style:" + (C.italicPromo ? "italic" : "normal") + "'>" + esc(C.promoLine) + "</span></div><hr/>" : "") +
+          (C.footerLine1 ? "<div class='c'>" + s("Footer", esc(C.footerLine1)) + "</div>" : "") +
+          (C.footerLine2 ? "<div class='c'>" + s("Footer", esc(C.footerLine2)) + "</div>" : "") +
+          (C.footerLine3 ? "<div class='c'>" + s("Footer", esc(C.footerLine3)) + "</div>" : "") +
           "<div style='height:" + (Math.max(1, Number(C.feedLines) || 3) * 4) + "mm'></div>" +
         "</div><div class='pagecut'></div></body></html>";
     }
