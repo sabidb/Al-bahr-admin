@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.17.0";
+const APP_VERSION = "8.18.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -1189,6 +1189,206 @@ function InvoiceSetup({ isOwner, branches, branchScope }) {
   );
 }
 
+// ── LOYALTY SETUP (Phase 13 — tiers, streaks, missions) ─────────────
+// Owner-only editor. Every write goes through a callable so client rules
+// can stay locked down (settings/tierConfig, settings/streakConfig,
+// missions/*  all reject direct client writes).
+function LoyaltySetup({ isOwner, branches }) {
+  const [subTab, setSubTab] = React.useState("tiers");
+  const [tiers, setTiers] = React.useState(null);
+  const [streak, setStreak] = React.useState(null);
+  const [missions, setMissions] = React.useState([]);
+  const [saved, setSaved] = React.useState(false);
+  const [savingKey, setSavingKey] = React.useState("");
+  const flash = () => { setSaved(true); setTimeout(() => setSaved(false), 2200); };
+
+  const DEFAULT_TIERS = [
+    { id: "bronze", name: "Bronze", nameAr: "برونزي", emoji: "🥉", metric: "spend", min: 0,    pointsMult: 1.0 },
+    { id: "silver", name: "Silver", nameAr: "فضي",   emoji: "🥈", metric: "spend", min: 500,  pointsMult: 1.1 },
+    { id: "gold",   name: "Gold",   nameAr: "ذهبي",  emoji: "🥇", metric: "spend", min: 1500, pointsMult: 1.25 },
+    { id: "vip",    name: "VIP",    nameAr: "كبار",  emoji: "💎", metric: "spend", min: 4000, pointsMult: 1.5 },
+  ];
+  const DEFAULT_STREAK = {
+    enabled: true, windowDays: 14, minOrders: 2, countRefunded: false,
+    milestones: [
+      { threshold: 3,  label: "3-order streak",  labelAr: "سلسلة ٣ طلبات",  bonusPoints: 20 },
+      { threshold: 5,  label: "5-order streak",  labelAr: "سلسلة ٥ طلبات",  bonusPoints: 40 },
+      { threshold: 10, label: "10-order streak", labelAr: "سلسلة ١٠ طلبات", bonusPoints: 100 },
+    ],
+  };
+
+  React.useEffect(() => {
+    let uT, uS, uM;
+    (async () => {
+      const cfg = await (window.FB && window.FB.getTierConfig ? window.FB.getTierConfig() : Promise.resolve(null));
+      setTiers((cfg && Array.isArray(cfg.tiers) && cfg.tiers.length) ? cfg.tiers : DEFAULT_TIERS);
+      const sk = await (window.FB && window.FB.getStreakConfig ? window.FB.getStreakConfig() : Promise.resolve(null));
+      setStreak(sk || DEFAULT_STREAK);
+      if (window.FB && window.FB.onTierConfigChange) uT = window.FB.onTierConfigChange((c) => { if (c && Array.isArray(c.tiers) && c.tiers.length) setTiers(c.tiers); });
+      if (window.FB && window.FB.onStreakConfigChange) uS = window.FB.onStreakConfigChange((c) => { if (c) setStreak(c); });
+      if (window.FB && window.FB.onMissionsChange) uM = window.FB.onMissionsChange((list) => setMissions(list || []));
+    })();
+    return () => { if (uT) uT(); if (uS) uS(); if (uM) uM(); };
+  }, []);
+
+  // ── Tiers editor ──
+  const saveTiers = async () => {
+    if (!window.FB || !window.FB.saveTierConfig || !tiers) return;
+    setSavingKey("tiers");
+    const res = await window.FB.saveTierConfig(tiers);
+    setSavingKey("");
+    if (res.ok) flash(); else alert("Save failed: " + (res.error || "unknown"));
+  };
+  const setTierField = (i, key, val) => setTiers((prev) => (prev || []).map((t, idx) => idx === i ? Object.assign({}, t, { [key]: val }) : t));
+  const removeTier  = (i) => setTiers((prev) => (prev || []).filter((_, idx) => idx !== i));
+  const addTier     = () => setTiers((prev) => (prev || []).concat([{ id: "tier" + Date.now(), name: "New tier", metric: "spend", min: 0, pointsMult: 1 }]));
+  const tiersUI = React.createElement("div", null,
+    React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 12 } },
+      "Tiers are evaluated in ascending order of `min`. The highest tier the customer qualifies for wins."),
+    (tiers || []).map((t, i) => React.createElement("div", { key: i, className: "card", style: { padding: 12, marginBottom: 10 } },
+      React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 8 } },
+        React.createElement("input", { className: "inp", style: { flex: "0 0 60px" }, value: t.emoji || "", onChange: e => setTierField(i, "emoji", e.target.value), placeholder: "🥉" }),
+        React.createElement("input", { className: "inp", style: { flex: 1 }, value: t.name || "", onChange: e => setTierField(i, "name", e.target.value), placeholder: "Bronze" }),
+        React.createElement("input", { className: "inp", style: { flex: 1 }, value: t.nameAr || "", onChange: e => setTierField(i, "nameAr", e.target.value), placeholder: "برونزي" })
+      ),
+      React.createElement("div", { style: { display: "flex", gap: 8 } },
+        React.createElement("select", { className: "inp", style: { flex: 1 }, value: t.metric || "spend", onChange: e => setTierField(i, "metric", e.target.value) },
+          React.createElement("option", { value: "spend" }, "Lifetime spend (SR)"),
+          React.createElement("option", { value: "points" }, "Lifetime points"),
+          React.createElement("option", { value: "orders" }, "Completed orders")
+        ),
+        React.createElement("input", { className: "inp", style: { flex: 1 }, type: "number", value: t.min || 0, onChange: e => setTierField(i, "min", Number(e.target.value) || 0), placeholder: "min threshold" }),
+        React.createElement("input", { className: "inp", style: { width: 90 }, type: "number", step: "0.05", value: t.pointsMult || 1, onChange: e => setTierField(i, "pointsMult", Number(e.target.value) || 1), title: "Points multiplier" }),
+        React.createElement("button", { onClick: () => removeTier(i), className: "btn-secondary", style: { padding: "0 12px", color: "#E60000" } }, "×")
+      )
+    )),
+    React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
+      React.createElement("button", { onClick: addTier, className: "btn-secondary", style: { flex: 1, padding: "11px" } }, "+ Add tier"),
+      React.createElement("button", { onClick: saveTiers, disabled: savingKey === "tiers", className: "btn-primary", style: { flex: 2, padding: "11px" } }, savingKey === "tiers" ? "Saving…" : "💾 Save tier ladder"))
+  );
+
+  // ── Streak editor ──
+  const saveStreak = async () => {
+    if (!window.FB || !window.FB.saveStreakConfig || !streak) return;
+    setSavingKey("streak");
+    const res = await window.FB.saveStreakConfig(streak);
+    setSavingKey("");
+    if (res.ok) flash(); else alert("Save failed: " + (res.error || "unknown"));
+  };
+  const setStreakField = (key, val) => setStreak((prev) => Object.assign({}, prev, { [key]: val }));
+  const setMilestone = (i, key, val) => setStreak((prev) => Object.assign({}, prev, { milestones: (prev.milestones || []).map((m, idx) => idx === i ? Object.assign({}, m, { [key]: val }) : m) }));
+  const removeMilestone = (i) => setStreak((prev) => Object.assign({}, prev, { milestones: (prev.milestones || []).filter((_, idx) => idx !== i) }));
+  const addMilestone = () => setStreak((prev) => Object.assign({}, prev, { milestones: (prev.milestones || []).concat([{ threshold: 1, label: "New milestone", bonusPoints: 10 }]) }));
+  const streakUI = streak && React.createElement("div", null,
+    React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 10 } },
+      React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 700 } },
+        React.createElement("input", { type: "checkbox", checked: streak.enabled !== false, onChange: e => setStreakField("enabled", e.target.checked) }),
+        "Order-streak enabled"),
+      React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12 } },
+        React.createElement("div", { style: { flex: 1 } },
+          React.createElement("label", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700 } }, "WINDOW (DAYS)"),
+          React.createElement("input", { className: "inp", type: "number", min: 1, max: 365, value: streak.windowDays || 14, onChange: e => setStreakField("windowDays", Number(e.target.value) || 14) })),
+        React.createElement("div", { style: { flex: 1 } },
+          React.createElement("label", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700 } }, "MIN ORDERS"),
+          React.createElement("input", { className: "inp", type: "number", min: 1, max: 100, value: streak.minOrders || 2, onChange: e => setStreakField("minOrders", Number(e.target.value) || 2) }))
+      ),
+      React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontWeight: 600, marginTop: 10 } },
+        React.createElement("input", { type: "checkbox", checked: !!streak.countRefunded, onChange: e => setStreakField("countRefunded", e.target.checked) }),
+        "Keep refunded orders in the streak")),
+    React.createElement("div", { style: { fontSize: 12, color: "#6B7280", margin: "10px 0 8px" } }, "MILESTONES"),
+    (streak.milestones || []).map((m, i) => React.createElement("div", { key: i, className: "card", style: { padding: 10, marginBottom: 8, display: "flex", gap: 8, alignItems: "center" } },
+      React.createElement("input", { className: "inp", type: "number", style: { width: 70 }, value: m.threshold || 1, onChange: e => setMilestone(i, "threshold", Number(e.target.value) || 1), title: "orders in a row" }),
+      React.createElement("input", { className: "inp", style: { flex: 2 }, value: m.label || "", onChange: e => setMilestone(i, "label", e.target.value), placeholder: "label (EN)" }),
+      React.createElement("input", { className: "inp", style: { flex: 2 }, value: m.labelAr || "", onChange: e => setMilestone(i, "labelAr", e.target.value), placeholder: "label (AR)" }),
+      React.createElement("input", { className: "inp", type: "number", style: { width: 80 }, value: m.bonusPoints || 0, onChange: e => setMilestone(i, "bonusPoints", Number(e.target.value) || 0), title: "bonus pts" }),
+      React.createElement("button", { onClick: () => removeMilestone(i), className: "btn-secondary", style: { padding: "0 10px", color: "#E60000" } }, "×"))),
+    React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
+      React.createElement("button", { onClick: addMilestone, className: "btn-secondary", style: { flex: 1, padding: "11px" } }, "+ Add milestone"),
+      React.createElement("button", { onClick: saveStreak, disabled: savingKey === "streak", className: "btn-primary", style: { flex: 2, padding: "11px" } }, savingKey === "streak" ? "Saving…" : "💾 Save streak config"))
+  );
+
+  // ── Missions editor ──
+  const [draft, setDraft] = React.useState({ title: "", kind: "spend", minSpend: 100, reward: { label: "Free Fries", bonusPoints: 50 } });
+  const saveMissionDraft = async () => {
+    if (!window.FB || !window.FB.saveMission) return;
+    if (!draft.title || !draft.kind || !draft.reward || !draft.reward.label) { alert("title / kind / reward.label required"); return; }
+    setSavingKey("mission");
+    const res = await window.FB.saveMission(draft);
+    setSavingKey("");
+    if (res.ok) { setDraft({ title: "", kind: "spend", minSpend: 100, reward: { label: "Free Fries", bonusPoints: 50 } }); flash(); }
+    else alert("Save failed: " + (res.error || "unknown"));
+  };
+  const toggleMissionActive = async (m) => {
+    if (!window.FB || !window.FB.saveMission) return;
+    await window.FB.saveMission(Object.assign({}, m, { active: !m.active }));
+  };
+  const deleteMissionRow = async (id) => {
+    if (!confirm("Delete this mission?")) return;
+    await window.FB.deleteMission(id);
+  };
+  const missionsUI = React.createElement("div", null,
+    React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 12 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 10 } }, "New mission"),
+      React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 8 } },
+        React.createElement("input", { className: "inp", style: { flex: 2 }, value: draft.title, onChange: e => setDraft(Object.assign({}, draft, { title: e.target.value })), placeholder: "Mission title (EN)" }),
+        React.createElement("input", { className: "inp", style: { flex: 2 }, value: draft.titleAr || "", onChange: e => setDraft(Object.assign({}, draft, { titleAr: e.target.value })), placeholder: "Mission title (AR)" })
+      ),
+      React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 8 } },
+        React.createElement("select", { className: "inp", style: { flex: 1 }, value: draft.kind, onChange: e => setDraft(Object.assign({}, draft, { kind: e.target.value })) },
+          React.createElement("option", { value: "spend" }, "Spend ≥ N SR"),
+          React.createElement("option", { value: "combo" }, "Combo (all item IDs)"),
+          React.createElement("option", { value: "product" }, "Buy N of item"),
+          React.createElement("option", { value: "quiet_hours" }, "Quiet-hour order")
+        ),
+        draft.kind === "spend" && React.createElement("input", { className: "inp", style: { flex: 1 }, type: "number", value: draft.minSpend || 0, onChange: e => setDraft(Object.assign({}, draft, { minSpend: Number(e.target.value) || 0 })), placeholder: "min SR" }),
+        (draft.kind === "combo" || draft.kind === "product") && React.createElement("input", { className: "inp", style: { flex: 2 }, value: (draft.itemIds || []).join(","), onChange: e => setDraft(Object.assign({}, draft, { itemIds: e.target.value.split(",").map(s => s.trim()).filter(Boolean) })), placeholder: "item ids (comma sep)" }),
+        draft.kind === "product" && React.createElement("input", { className: "inp", style: { width: 80 }, type: "number", value: draft.itemQty || 1, onChange: e => setDraft(Object.assign({}, draft, { itemQty: Number(e.target.value) || 1 })), placeholder: "qty" }),
+        draft.kind === "quiet_hours" && React.createElement("input", { className: "inp", style: { width: 90 }, value: draft.quietFromHHMM || "", onChange: e => setDraft(Object.assign({}, draft, { quietFromHHMM: e.target.value })), placeholder: "from HH:MM" }),
+        draft.kind === "quiet_hours" && React.createElement("input", { className: "inp", style: { width: 90 }, value: draft.quietToHHMM || "", onChange: e => setDraft(Object.assign({}, draft, { quietToHHMM: e.target.value })), placeholder: "to HH:MM" })
+      ),
+      React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 8 } },
+        React.createElement("input", { className: "inp", style: { flex: 2 }, value: draft.reward.label, onChange: e => setDraft(Object.assign({}, draft, { reward: Object.assign({}, draft.reward, { label: e.target.value }) })), placeholder: "Reward label" }),
+        React.createElement("input", { className: "inp", style: { flex: 2 }, value: draft.reward.labelAr || "", onChange: e => setDraft(Object.assign({}, draft, { reward: Object.assign({}, draft.reward, { labelAr: e.target.value }) })), placeholder: "Reward label (AR)" }),
+        React.createElement("input", { className: "inp", style: { width: 100 }, type: "number", value: draft.reward.bonusPoints || 0, onChange: e => setDraft(Object.assign({}, draft, { reward: Object.assign({}, draft.reward, { bonusPoints: Number(e.target.value) || 0 }) })), placeholder: "bonus pts" })
+      ),
+      React.createElement("div", { style: { display: "flex", gap: 8 } },
+        React.createElement("input", { className: "inp", style: { flex: 1 }, type: "number", value: draft.maxCompletions || 0, onChange: e => setDraft(Object.assign({}, draft, { maxCompletions: Number(e.target.value) || 0 })), placeholder: "max total (0 = ∞)" }),
+        React.createElement("input", { className: "inp", style: { flex: 1 }, type: "number", value: draft.maxPerCustomer || 1, onChange: e => setDraft(Object.assign({}, draft, { maxPerCustomer: Number(e.target.value) || 1 })), placeholder: "per customer" }),
+        React.createElement("button", { onClick: saveMissionDraft, disabled: savingKey === "mission", className: "btn-primary", style: { flex: 2, padding: "11px" } }, savingKey === "mission" ? "Saving…" : "💾 Save mission"))
+    ),
+    React.createElement("div", { style: { fontSize: 12, color: "#6B7280", margin: "10px 0 8px" } }, missions.length + " active mission" + (missions.length === 1 ? "" : "s")),
+    missions.map(m => React.createElement("div", { key: m.id, className: "card", style: { padding: 12, marginBottom: 8 } },
+      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
+        React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+          React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#1A1D27" } }, (m.active ? "🟢 " : "⚪ ") + (m.title || m.id)),
+          React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginTop: 2 } },
+            "kind: " + m.kind + " · " + ((m.reward && m.reward.label) || "no reward") + " · " + (m.completions || 0) + "/" + (m.maxCompletions || "∞"))),
+        React.createElement("div", { style: { display: "flex", gap: 6 } },
+          React.createElement("button", { onClick: () => toggleMissionActive(m), className: "btn-secondary", style: { padding: "6px 10px", fontSize: 11 } }, m.active ? "Pause" : "Activate"),
+          React.createElement("button", { onClick: () => deleteMissionRow(m.id), className: "btn-secondary", style: { padding: "6px 10px", fontSize: 11, color: "#E60000" } }, "Delete"))
+      )
+    ))
+  );
+
+  const tabs = [
+    { id: "tiers", label: "🏅 Tiers" },
+    { id: "streak", label: "🔥 Streak" },
+    { id: "missions", label: "🎯 Missions" },
+  ];
+
+  return React.createElement("div", null,
+    !isOwner && React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 14, background: "#FFF7ED", border: "1px solid #FED7AA", fontSize: 12, color: "#9A3412", fontWeight: 600 } },
+      "🔒 Owner-only editor. Managers can view current state but not save."),
+    saved && React.createElement("div", { style: { background: "#ECFDF5", border: "1px solid #BBF7D0", color: "#059669", padding: "12px 14px", borderRadius: 12, marginBottom: 14, fontWeight: 700, fontSize: 13 } }, "✅ Saved — live in customer app"),
+    React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 16, background: "#F4F5F9", borderRadius: 12, padding: 4 } },
+      tabs.map(t => React.createElement("button", { key: t.id, onClick: () => setSubTab(t.id), style: { flex: 1, padding: "8px 4px", borderRadius: 10, border: "none", background: subTab === t.id ? "#fff" : "transparent", color: subTab === t.id ? "#E60000" : "#6B7280", fontSize: 12, fontWeight: subTab === t.id ? 700 : 500, cursor: "pointer" } }, t.label))
+    ),
+    subTab === "tiers" && tiersUI,
+    subTab === "streak" && streakUI,
+    subTab === "missions" && missionsUI
+  );
+}
+
 function SettingsTabNew(props) {
   const settingsIsOwner = !!(props && props.isOwner);
   const settingsBranches = (props && props.branches) || [];
@@ -1281,6 +1481,7 @@ function SettingsTabNew(props) {
     { id: "printer", label: "Printer" },
     { id: "invoice", label: "Invoice" },
     { id: "branches", label: "Branches" },
+    { id: "loyalty", label: "Loyalty" },
     { id: "system", label: "System" },
   ];
 
@@ -1427,6 +1628,11 @@ function SettingsTabNew(props) {
     // Invoice section
     section === "invoice" && React.createElement(InvoiceSetup, { isOwner: settingsIsOwner, branches: settingsBranches, branchScope: settingsBranchScope }),
 
+    // Phase 13 — VIP tiers / order streak / missions config. All three
+    // sit under one "Loyalty" tab so an owner doesn't hunt across three
+    // panels to tune the engagement engine.
+    section === "loyalty" && React.createElement(LoyaltySetup, { isOwner: settingsIsOwner, branches: settingsBranches }),
+
     // Branches section
     section === "branches" && React.createElement("div", null,
       [
@@ -1478,8 +1684,8 @@ function SettingsTabNew(props) {
       )
     ),
 
-    // Save button (hidden on Printer / Invoice sections — each has its own Save)
-    section !== "printer" && section !== "invoice" && React.createElement("button", {
+    // Save button (hidden on Printer / Invoice / Loyalty sections — each has its own Save)
+    section !== "printer" && section !== "invoice" && section !== "loyalty" && React.createElement("button", {
       onClick: saveAll,
       className: "btn-primary",
       style: { width: "100%", padding: "16px", fontSize: 15, marginTop: 16 }
@@ -3990,6 +4196,51 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
             var res = await call({});
             return (res && res.data) || null;
           } catch(e) { return null; }
+        },
+        // ── Phase 13: tiers / streaks / missions config ─────────────────
+        getTierConfig: async function(){
+          try { var s = await getDoc(doc(_db,"settings","tierConfig")); return s.exists() ? s.data() : null; } catch(e){ return null; }
+        },
+        onTierConfigChange: function(cb){ return onSnapshot(doc(_db,"settings","tierConfig"), function(s){ cb(s.exists() ? s.data() : null); }); },
+        saveTierConfig: async function(tiers){
+          try {
+            var call = httpsCallable(_fns, "saveTierConfig");
+            var res = await call({ tiers: tiers });
+            return { ok: !!(res && res.data && res.data.ok), data: (res && res.data) || null };
+          } catch(e){ window.__fbErr("tier config", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
+        },
+        getStreakConfig: async function(){
+          try { var s = await getDoc(doc(_db,"settings","streakConfig")); return s.exists() ? s.data() : null; } catch(e){ return null; }
+        },
+        onStreakConfigChange: function(cb){ return onSnapshot(doc(_db,"settings","streakConfig"), function(s){ cb(s.exists() ? s.data() : null); }); },
+        saveStreakConfig: async function(cfg){
+          try {
+            var call = httpsCallable(_fns, "saveStreakConfig");
+            var res = await call({ config: cfg });
+            return { ok: !!(res && res.data && res.data.ok) };
+          } catch(e){ window.__fbErr("streak config", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
+        },
+        onMissionsChange: function(cb){ return onSnapshot(collection(_db,"missions"), function(s){ cb(s.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); })); }); },
+        saveMission: async function(m){
+          try {
+            var call = httpsCallable(_fns, "saveMission");
+            var res = await call({ mission: m });
+            return { ok: !!(res && res.data && res.data.ok), id: (res && res.data && res.data.id) || null };
+          } catch(e){ window.__fbErr("mission", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
+        },
+        deleteMission: async function(id){
+          try {
+            var call = httpsCallable(_fns, "deleteMission");
+            var res = await call({ id: id });
+            return { ok: !!(res && res.data && res.data.ok) };
+          } catch(e){ window.__fbErr("mission delete", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
+        },
+        forceRecomputeTier: async function(customerUid){
+          try {
+            var call = httpsCallable(_fns, "forceRecomputeTier");
+            var res = await call({ customerUid: customerUid });
+            return { ok: !!(res && res.data && res.data.ok), tier: (res && res.data && res.data.tier) || null };
+          } catch(e){ window.__fbErr("tier recompute", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
         },
         // Upload a File/Blob to Storage and return its download URL. Path
         // must start with "items/" — that's the only prefix storage.rules
