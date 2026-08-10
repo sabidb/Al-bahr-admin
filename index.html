@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.14.1";
+const APP_VERSION = "8.15.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -797,20 +797,26 @@ function PrinterSetup({ isOwner, branches, branchScope }) {
   const [saved, setSaved] = React.useState(false);
   const [detecting, setDetecting] = React.useState(false);
   const [detected, setDetected] = React.useState([]);
+  // Phase 8 — print reliability telemetry surfaced from ThermalPrint.
+  const [stats, setStats] = React.useState({ ok: 0, fail: 0, fallback: 0, lastFailAt: null, lastFailMsg: null });
+  const [showLog, setShowLog] = React.useState(false);
+  const [log, setLog] = React.useState([]);
 
   React.useEffect(() => {
-    // Poll the printer bridge for connection status; the ThermalPrint module
-    // may still be booting when this section first mounts.
+    // Poll the printer bridge for connection status + print stats. The
+    // ThermalPrint module may still be booting when this section first mounts.
     let alive = true;
     const tick = () => {
       const t = TP();
       if (!alive || !t) return;
       setConnected(!!(t.getStatus && t.getStatus()));
+      if (t.getStats) setStats(t.getStats());
+      if (showLog && t.getLog) setLog(t.getLog(30));
     };
     tick();
     const id = setInterval(tick, 2000);
     return () => { alive = false; clearInterval(id); };
-  }, []);
+  }, [showLog]);
 
   const detect = async () => {
     if (typeof qz === "undefined") { alert("QZ Tray not loaded — install and start QZ Tray on this computer."); return; }
@@ -874,6 +880,46 @@ function PrinterSetup({ isOwner, branches, branchScope }) {
             connected ? "Ready for silent thermal printing." : "Install QZ Tray on this computer and make sure it's running.")
         ),
         !connected && React.createElement("a", { href: "https://qz.io/download/", target: "_blank", style: { background: "#FFF7ED", border: "1px solid #FED7AA", color: "#EA580C", padding: "9px 14px", borderRadius: 10, fontSize: 12, fontWeight: 700, textDecoration: "none" } }, "Download →")
+      )
+    ),
+
+    // Print reliability card — Phase 8. Rolling stats + tail of the print
+    // log so the operator can see at a glance whether tickets are landing
+    // and, when they aren't, why. Numbers survive page reload (localStorage).
+    React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14, border: "1.5px solid " + (stats.fail > 0 ? "#FECACA" : "#EAECF2") } },
+      React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 } },
+        React.createElement("div", { style: { fontWeight: 800, fontSize: 14, color: "#1A1D27" } }, "🖨️ Print reliability"),
+        stats.fail > 0 && React.createElement("button", {
+          onClick: () => { const t = TP(); if (t && t.clearFailures) { t.clearFailures(); setStats(t.getStats()); } },
+          style: { fontSize: 11, background: "#FEF2F2", border: "1px solid #FECACA", color: "#DC2626", padding: "5px 10px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }
+        }, "Clear failures")
+      ),
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12 } },
+        React.createElement("div", { style: { background: "#ECFDF5", border: "1px solid #BBF7D0", borderRadius: 10, padding: "10px 12px" } },
+          React.createElement("div", { style: { fontSize: 10, color: "#059669", fontWeight: 700, letterSpacing: 0.4 } }, "PRINTED"),
+          React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: "#059669" } }, stats.ok || 0)
+        ),
+        React.createElement("div", { style: { background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "10px 12px" } },
+          React.createElement("div", { style: { fontSize: 10, color: "#B45309", fontWeight: 700, letterSpacing: 0.4 } }, "FALLBACK"),
+          React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: "#B45309" } }, stats.fallback || 0)
+        ),
+        React.createElement("div", { style: { background: stats.fail > 0 ? "#FEF2F2" : "#F4F5F9", border: "1px solid " + (stats.fail > 0 ? "#FECACA" : "#EAECF2"), borderRadius: 10, padding: "10px 12px" } },
+          React.createElement("div", { style: { fontSize: 10, color: stats.fail > 0 ? "#DC2626" : "#6B7280", fontWeight: 700, letterSpacing: 0.4 } }, "FAILED"),
+          React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: stats.fail > 0 ? "#DC2626" : "#9CA3AF" } }, stats.fail || 0)
+        )
+      ),
+      stats.lastFailMsg && React.createElement("div", { style: { fontSize: 11, color: "#DC2626", marginBottom: 10 } },
+        "Last failure " + (stats.lastFailAt ? new Date(stats.lastFailAt).toLocaleString() : "") + " · " + stats.lastFailMsg),
+      React.createElement("button", {
+        onClick: () => setShowLog(v => !v),
+        style: { width: "100%", padding: "9px", background: "#F4F5F9", border: "1px solid #EAECF2", color: "#6B7280", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer" }
+      }, showLog ? "Hide log" : "Show last 30 events"),
+      showLog && React.createElement("div", { style: { marginTop: 10, maxHeight: 260, overflowY: "auto", background: "#FAFBFC", border: "1px solid #EAECF2", borderRadius: 10, padding: 8 } },
+        (log && log.length > 0)
+          ? log.map((e, i) => React.createElement("div", { key: i, style: { fontSize: 11, padding: "5px 4px", borderBottom: "1px solid #F1F5F9", color: e.ok ? "#059669" : "#DC2626", fontFamily: "monospace" } },
+              (e.ok ? "✓" : "✗") + " " + new Date(e.at).toLocaleTimeString() + " · #" + (e.orderNo || "?") + " · " + (e.via || "?") + (e.fallback ? " (fallback)" : "") + (e.msg ? " — " + e.msg : "")
+            ))
+          : React.createElement("div", { style: { fontSize: 12, color: "#9CA3AF", textAlign: "center", padding: "18px 0" } }, "No print events recorded yet.")
       )
     ),
 
@@ -4024,9 +4070,66 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     var AUTO_PRINT   = _saved.autoPrint !== false;         // auto-print every new order
     var COPIES       = _saved.copies || 1;                 // number of copies per order
     var PRINTER_MAP  = _saved.printerMap || {};            // { kakkiyah:"PP9000EU-1", subhani:"...", waliy:"..." }
-    var PRINTED_IDS  = new Set();                          // avoid double-printing same order
-    var FIRST_LOAD   = true;                               // skip existing orders on first load
     var BRANCH_FILTER = "";                                // set by branch selection — only print matching branch
+
+    // ── Phase 8: reliability ────────────────────────────────
+    // Persist the printed-order dedup set so a page reload doesn't reprint an
+    // order that landed between now and the last reload. Bounded to the last
+    // 500 keys — the receipt printer never processes more than a day of
+    // history and this survives a browser restart.
+    var DEDUP_KEY = "ba_print_dedup_v1";
+    var LOG_KEY   = "ba_print_log_v1";
+    var STATS_KEY = "ba_print_stats_v1";
+    var DEDUP_MAX = 500;
+    var LOG_MAX   = 200;
+
+    function loadDedup() {
+      try { var s = localStorage.getItem(DEDUP_KEY); if (s) return new Set(JSON.parse(s)); } catch(e){}
+      return new Set();
+    }
+    function saveDedup() {
+      try {
+        var arr = Array.from(PRINTED_IDS);
+        if (arr.length > DEDUP_MAX) arr = arr.slice(-DEDUP_MAX);
+        localStorage.setItem(DEDUP_KEY, JSON.stringify(arr));
+      } catch(e){}
+    }
+    function loadLog() {
+      try { var s = localStorage.getItem(LOG_KEY); if (s) return JSON.parse(s); } catch(e){}
+      return [];
+    }
+    function saveLog() {
+      try {
+        var arr = PRINT_LOG.slice(-LOG_MAX);
+        localStorage.setItem(LOG_KEY, JSON.stringify(arr));
+      } catch(e){}
+    }
+    function loadStats() {
+      try { var s = localStorage.getItem(STATS_KEY); if (s) return JSON.parse(s); } catch(e){}
+      return { ok: 0, fail: 0, fallback: 0, lastFailAt: null, lastFailMsg: null };
+    }
+    function saveStats() {
+      try { localStorage.setItem(STATS_KEY, JSON.stringify(PRINT_STATS)); } catch(e){}
+    }
+    function logPrint(entry) {
+      var e = Object.assign({ at: new Date().toISOString() }, entry);
+      PRINT_LOG.push(e);
+      if (PRINT_LOG.length > LOG_MAX) PRINT_LOG.splice(0, PRINT_LOG.length - LOG_MAX);
+      saveLog();
+      if (e.ok) PRINT_STATS.ok = (PRINT_STATS.ok || 0) + 1;
+      else if (e.fallback) PRINT_STATS.fallback = (PRINT_STATS.fallback || 0) + 1;
+      else {
+        PRINT_STATS.fail = (PRINT_STATS.fail || 0) + 1;
+        PRINT_STATS.lastFailAt = e.at;
+        PRINT_STATS.lastFailMsg = e.msg || null;
+      }
+      saveStats();
+    }
+
+    var PRINTED_IDS  = loadDedup();  // avoid double-printing same order (persistent)
+    var PRINT_LOG    = loadLog();    // last N print events with outcome
+    var PRINT_STATS  = loadStats();  // running ok/fail/fallback counters
+    var FIRST_LOAD   = true;         // skip existing orders on first load
 
     var statusEl = null;
 
@@ -4238,6 +4341,19 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         lines.push(LEFT + line("-"));
       }
 
+      // REFUNDED / CANCELLED banner — mounted before ITEMS so a re-print
+      // never hides the fact that this order is no longer a live one.
+      if (order.refund && Number(order.refund.amount) > 0) {
+        lines.push(CENTER + TALL + BOLD_ON + "*** REFUNDED ***" + BOLD_OFF + LF + NORMAL);
+        lines.push(CENTER + "SR " + Number(order.refund.amount).toFixed(2) + LF);
+        if (order.refund.reason) lines.push(CENTER + stripEmoji(order.refund.reason) + LF);
+        lines.push(line("-"));
+      } else if (String(order.status || "").toLowerCase() === "cancelled") {
+        lines.push(CENTER + TALL + BOLD_ON + "*** CANCELLED ***" + BOLD_OFF + LF + NORMAL);
+        if (order.declineReason) lines.push(CENTER + stripEmoji(order.declineReason) + LF);
+        lines.push(line("-"));
+      }
+
       // Items
       if (C.showItems) {
         lines.push(CENTER + BOLD_ON + "ITEMS" + BOLD_OFF + LF);
@@ -4245,7 +4361,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         (order.items || []).forEach(function (item) {
           var name = stripEmoji(item.name || "");
           var qty = item.qty || 1;
-          var price = "SR " + ((item.price || 0) * qty).toFixed(2);
+          // Phase 6: prefer the persisted lineTotal (which already accounts
+          // for any per-line comp) and fall back to price*qty for legacy rows.
+          var lineTotal = (typeof item.lineTotal === "number") ? item.lineTotal : (item.price || 0) * qty;
+          var price = "SR " + Number(lineTotal).toFixed(2);
           // Name, qty and any customer note in TALL so the cook can read the
           // three things they actually build off at a glance; price stays
           // normal below, right-aligned via pad().
@@ -4253,20 +4372,46 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
           if (C.showItemArabic && item.nameAr) lines.push("  " + stripEmoji(item.nameAr) + LF);
           lines.push(TALL + BOLD_ON + "  x" + qty + BOLD_OFF + LF + NORMAL);
           lines.push(pad("", price) + LF);
+          // Menu-vs-app "was" annotation when the counter price is set higher
+          // than the app price — Phase 6 lineMenuValue tells us what the
+          // walk-in customer would have paid at the counter.
+          var menuVal = (typeof item.lineMenuValue === "number") ? item.lineMenuValue
+                       : (Number(item.menuPrice) > 0 ? Number(item.menuPrice) * qty : 0);
+          if (menuVal > lineTotal + 0.005) {
+            lines.push(pad("", "(was SR " + Number(menuVal).toFixed(2) + ")") + LF);
+          }
           if (item.note) lines.push(TALL + BOLD_ON + "  >> " + stripEmoji(item.note) + BOLD_OFF + LF + NORMAL);
         });
         lines.push(line("-"));
         if (subtotal != null) lines.push(pad("Subtotal", "SR " + subtotal.toFixed(2)) + LF);
+        // Phase 6 app-savings: only surface when it's non-zero so ordinary
+        // orders don't print a "0.00" line.
+        var appDiscount = (order.totals && typeof order.totals.appDiscount === "number")
+          ? Number(order.totals.appDiscount) : 0;
+        if (appDiscount > 0) lines.push(pad("App savings", "-SR " + appDiscount.toFixed(2)) + LF);
         if (order.platformFee) lines.push(pad("Platform Fee", "SR " + Number(order.platformFee).toFixed(2)) + LF);
         if (order.deliveryFee) lines.push(pad("Delivery Fee", "SR " + Number(order.deliveryFee).toFixed(2)) + LF);
         if (discount) lines.push(pad("Discount", "-SR " + discount.toFixed(2)) + LF);
         if (order.couponCode) lines.push(pad("Coupon", stripEmoji(order.couponCode)) + LF);
+        if (order.refund && Number(order.refund.amount) > 0) {
+          lines.push(pad("Refund", "-SR " + Number(order.refund.amount).toFixed(2)) + LF);
+        }
         // TALL keeps normal character width, so pad()'s alignment survives
         // even though every char is now twice as tall.
         lines.push(TALL + BOLD_ON + pad("TOTAL", "SR " + total.toFixed(2)) + BOLD_OFF + LF + NORMAL);
         var inclVat = order.vat || Math.round(total / 1.15 * 0.15 * 100) / 100;
         lines.push(CENTER + "(Prices incl. 15% VAT: SR " + inclVat.toFixed(2) + ")" + LF);
         lines.push(line("="));
+      }
+
+      // Phase 11 reward slot — Phase 10/11 stamps order.reward on eligible
+      // orders. Reserving the block now so the kitchen ticket layout doesn't
+      // change when rewards ship. Silent when absent.
+      if (order.reward && order.reward.code) {
+        lines.push(CENTER + BOLD_ON + "REWARD CODE" + BOLD_OFF + LF);
+        lines.push(CENTER + TALL + BOLD_ON + stripEmoji(order.reward.code) + BOLD_OFF + LF + NORMAL);
+        if (order.reward.label) lines.push(CENTER + stripEmoji(order.reward.label) + LF);
+        lines.push(LEFT + line("-"));
       }
 
       // Order-level note (customer's "any special request" from checkout)
@@ -4458,35 +4603,68 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         return qz.print(config, data);
       });
     }
-    // Try QZ Tray silent raw printing first. Fall back to the browser's
-    // built-in print pipeline (Windows manual printing) if QZ Tray isn't
-    // running — same data, driver-side auto-cut.
-    function printOrder(order) {
-      return connect().then(function () {
-        return _doPrint(order);
-      }).then(function () {
-        console.log("✅ Printed order #" + order.orderNo);
+    // Phase 8 hardening:
+    //   • persistent dedup — key is added to PRINTED_IDS *before* the print
+    //     attempt so a mid-flight page reload doesn't reprint. If the print
+    //     ultimately fails we log the failure but keep the dedup — the
+    //     operator sees the fail badge in Settings and can hit Reprint
+    //     explicitly, which is what they want anyway (avoids the printer
+    //     spamming a burst of retries after a hiccup).
+    //   • exponential backoff (1s, 3s, 8s) with re-connect between tries.
+    //   • Windows-browser fallback only after every QZ attempt has failed.
+    //   • every attempt writes a PRINT_LOG entry; the running stats
+    //     (ok/fail/fallback + lastFailAt/Msg) power the Settings badge.
+    var QZ_RETRY_DELAYS = [1000, 3000, 8000];
+
+    function tryQzOnce(order, attempt) {
+      return connect().then(function () { return _doPrint(order); }).then(function () {
+        console.log("✅ Printed order #" + order.orderNo + (attempt > 1 ? " (attempt " + attempt + ")" : ""));
         showStatus("✅ Printed #" + order.orderNo, "ok");
-        PRINTED_IDS.add(_dedupKey(order));
-      }).catch(function (err) {
-        console.warn("QZ print attempt 1 failed:", err && err.message || err);
-        return new Promise(function (r) { setTimeout(r, 1200); })
-          .then(function () { return connect(); })
-          .then(function () { return _doPrint(order); })
-          .then(function () {
-            console.log("✅ Printed order #" + order.orderNo + " (retry)");
-            showStatus("✅ Printed #" + order.orderNo, "ok");
-            PRINTED_IDS.add(_dedupKey(order));
-          })
-          .catch(function (err2) {
-            console.warn("QZ retry failed, falling back to Windows browser print:", err2 && err2.message || err2);
-            showStatus("🖨️ Using Windows printer #" + order.orderNo, "warn");
-            return browserPrint(order).then(function () {
-              PRINTED_IDS.add(_dedupKey(order));
-              showStatus("✅ Printed via Windows #" + order.orderNo, "ok");
-            });
-          });
+        logPrint({ ok: true, orderNo: order.orderNo, fbId: order.fbId, printer: printerFor(order), via: "qz", attempt: attempt });
+        return true;
       });
+    }
+
+    function printOrder(order) {
+      var key = _dedupKey(order);
+      // Claim the dedup key up-front so racing callers (the orders listener
+      // firing while a manual Reprint is in flight) don't double up.
+      PRINTED_IDS.add(key); saveDedup();
+
+      var attempt = 0;
+      function attemptQz() {
+        attempt += 1;
+        return tryQzOnce(order, attempt).catch(function (err) {
+          var msg = (err && (err.message || err.code)) || String(err);
+          console.warn("QZ print attempt " + attempt + " failed:", msg);
+          if (attempt >= QZ_RETRY_DELAYS.length + 1) throw err;
+          var delay = QZ_RETRY_DELAYS[attempt - 1];
+          return new Promise(function (r) { setTimeout(r, delay); }).then(attemptQz);
+        });
+      }
+
+      return attemptQz().catch(function (finalErr) {
+        var msg = (finalErr && (finalErr.message || finalErr.code)) || String(finalErr);
+        console.warn("QZ exhausted after " + attempt + " attempts, falling back to Windows print:", msg);
+        showStatus("🖨️ Using Windows printer #" + order.orderNo, "warn");
+        return browserPrint(order).then(function () {
+          showStatus("✅ Printed via Windows #" + order.orderNo, "ok");
+          logPrint({ ok: true, fallback: true, orderNo: order.orderNo, fbId: order.fbId, printer: printerFor(order), via: "browser", attempts: attempt, reason: msg });
+        }).catch(function (bpErr) {
+          var bpMsg = (bpErr && (bpErr.message || bpErr.code)) || String(bpErr);
+          showStatus("❌ Print failed #" + order.orderNo, "error");
+          logPrint({ ok: false, orderNo: order.orderNo, fbId: order.fbId, printer: printerFor(order), via: "browser", attempts: attempt, msg: "browser: " + bpMsg + " (qz: " + msg + ")" });
+          throw bpErr;
+        });
+      });
+    }
+
+    // Explicit reprint — clears the dedup slot for this order so the retry
+    // pipeline runs from scratch. Used by the operator "Reprint" button after
+    // a failure or when a ticket physically didn't come out.
+    function reprintOrder(order) {
+      PRINTED_IDS.delete(_dedupKey(order)); saveDedup();
+      return printOrder(order);
     }
 
     // ── Auto-print hook (called from orders listener) ───────
@@ -4731,6 +4909,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     return {
       connect: connect,
       print: printOrder,
+      reprint: reprintOrder,
       openSettings: openSettings,
       setAutoPrint: function (v) { AUTO_PRINT = !!v; saveCfg(); },
       setPrinterName: function (n) { PRINTER_NAME = n || "PP9000EU"; saveCfg(); },
@@ -4744,8 +4923,13 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       getStatus: function () { return qz && qz.websocket.isActive(); },
       getConfig: function () { return { printerName: PRINTER_NAME, copies: COPIES, autoPrint: AUTO_PRINT, printerMap: Object.assign({}, PRINTER_MAP) }; },
       // Pre-claim a dedup key so the Firestore listener's auto-print hook
-      // won't race with an explicit Accept-triggered print.
-      markPrinted: function (order) { if (order) PRINTED_IDS.add(_dedupKey(order)); },
+      // won't race with an explicit Accept-triggered print. Persistent.
+      markPrinted: function (order) { if (order) { PRINTED_IDS.add(_dedupKey(order)); saveDedup(); } },
+      isPrinted: function (order) { return order ? PRINTED_IDS.has(_dedupKey(order)) : false; },
+      // Phase 8: reliability telemetry for the Settings panel.
+      getStats: function () { return Object.assign({}, PRINT_STATS); },
+      getLog: function (n) { var arr = PRINT_LOG.slice(-(n||50)); return arr.slice().reverse(); },
+      clearFailures: function () { PRINT_STATS.fail = 0; PRINT_STATS.lastFailAt = null; PRINT_STATS.lastFailMsg = null; saveStats(); },
       // Invoice template overrides. Called by the app after loading Firestore
       // config, and every time it changes via onSnapshot.
       setInvoiceConfig: function (cfg) { setInvoiceConfig(cfg); },
