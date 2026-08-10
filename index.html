@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.18.0";
+const APP_VERSION = "8.19.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -1370,10 +1370,83 @@ function LoyaltySetup({ isOwner, branches }) {
     ))
   );
 
+  // ── Referrals editor ─────────────────────────────────────────────
+  const [refCfg, setRefCfg] = React.useState(null);
+  const [refRows, setRefRows] = React.useState([]);
+  const DEFAULT_REFERRAL = {
+    enabled: true, minOrderTotal: 50,
+    rewardReferrerPoints: 50, rewardRefereePoints: 50,
+    maxPerReferrerDay: 5, maxPerReferrerLifetime: 50, expiryDays: 60,
+  };
+  React.useEffect(() => {
+    let u;
+    (async () => {
+      const c = await (window.FB && window.FB.getReferralConfig ? window.FB.getReferralConfig() : Promise.resolve(null));
+      setRefCfg(c || DEFAULT_REFERRAL);
+      const rows = await (window.FB && window.FB.listRecentReferrals ? window.FB.listRecentReferrals(200) : Promise.resolve([]));
+      setRefRows(rows || []);
+      if (window.FB && window.FB.onReferralConfigChange) u = window.FB.onReferralConfigChange((c) => { if (c) setRefCfg(c); });
+    })();
+    return () => { if (u) u(); };
+  }, []);
+  const setRefField = (k, v) => setRefCfg((p) => Object.assign({}, p, { [k]: v }));
+  const saveReferrals = async () => {
+    if (!window.FB || !window.FB.saveReferralConfig || !refCfg) return;
+    setSavingKey("ref");
+    const res = await window.FB.saveReferralConfig(refCfg);
+    setSavingKey("");
+    if (res.ok) flash(); else alert("Save failed: " + (res.error || "unknown"));
+  };
+  const qualified = refRows.filter(r => r.status === "qualified");
+  const pending = refRows.filter(r => r.status === "pending");
+  const rewardCost = qualified.length * (((refCfg && refCfg.rewardReferrerPoints) || 0) + ((refCfg && refCfg.rewardRefereePoints) || 0));
+  const referralsUI = refCfg && React.createElement("div", null,
+    React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 12 } },
+      React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 700 } },
+        React.createElement("input", { type: "checkbox", checked: refCfg.enabled !== false, onChange: e => setRefField("enabled", e.target.checked) }),
+        "Referrals enabled"),
+      React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12 } },
+        React.createElement("div", { style: { flex: 1 } },
+          React.createElement("label", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700 } }, "MIN ORDER (SR)"),
+          React.createElement("input", { className: "inp", type: "number", value: refCfg.minOrderTotal || 0, onChange: e => setRefField("minOrderTotal", Number(e.target.value) || 0) })),
+        React.createElement("div", { style: { flex: 1 } },
+          React.createElement("label", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700 } }, "EXPIRY (DAYS)"),
+          React.createElement("input", { className: "inp", type: "number", value: refCfg.expiryDays || 60, onChange: e => setRefField("expiryDays", Number(e.target.value) || 60) }))),
+      React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
+        React.createElement("div", { style: { flex: 1 } },
+          React.createElement("label", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700 } }, "REFERRER PTS"),
+          React.createElement("input", { className: "inp", type: "number", value: refCfg.rewardReferrerPoints || 0, onChange: e => setRefField("rewardReferrerPoints", Number(e.target.value) || 0) })),
+        React.createElement("div", { style: { flex: 1 } },
+          React.createElement("label", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700 } }, "REFEREE PTS"),
+          React.createElement("input", { className: "inp", type: "number", value: refCfg.rewardRefereePoints || 0, onChange: e => setRefField("rewardRefereePoints", Number(e.target.value) || 0) }))),
+      React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
+        React.createElement("div", { style: { flex: 1 } },
+          React.createElement("label", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700 } }, "MAX / REFERRER / DAY (0 = ∞)"),
+          React.createElement("input", { className: "inp", type: "number", value: refCfg.maxPerReferrerDay || 0, onChange: e => setRefField("maxPerReferrerDay", Number(e.target.value) || 0) })),
+        React.createElement("div", { style: { flex: 1 } },
+          React.createElement("label", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700 } }, "MAX LIFETIME"),
+          React.createElement("input", { className: "inp", type: "number", value: refCfg.maxPerReferrerLifetime || 0, onChange: e => setRefField("maxPerReferrerLifetime", Number(e.target.value) || 0) }))),
+      React.createElement("button", { onClick: saveReferrals, disabled: savingKey === "ref", className: "btn-primary", style: { width: "100%", padding: "13px", fontSize: 14, marginTop: 14 } },
+        savingKey === "ref" ? "Saving…" : "💾 Save referral config")),
+    React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 12 } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 8 } }, "📊 Conversion (last 200 rows)"),
+      React.createElement("div", { style: { display: "flex", gap: 12 } },
+        React.createElement("div", { style: { flex: 1, textAlign: "center" } },
+          React.createElement("div", { style: { fontSize: 24, fontWeight: 800, color: "#059669" } }, qualified.length),
+          React.createElement("div", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700 } }, "QUALIFIED")),
+        React.createElement("div", { style: { flex: 1, textAlign: "center" } },
+          React.createElement("div", { style: { fontSize: 24, fontWeight: 800, color: "#D97706" } }, pending.length),
+          React.createElement("div", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700 } }, "PENDING")),
+        React.createElement("div", { style: { flex: 1, textAlign: "center" } },
+          React.createElement("div", { style: { fontSize: 24, fontWeight: 800, color: "#E60000" } }, rewardCost),
+          React.createElement("div", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700 } }, "PTS COST"))))
+  );
+
   const tabs = [
     { id: "tiers", label: "🏅 Tiers" },
     { id: "streak", label: "🔥 Streak" },
     { id: "missions", label: "🎯 Missions" },
+    { id: "referrals", label: "🤝 Referrals" },
   ];
 
   return React.createElement("div", null,
@@ -1385,7 +1458,8 @@ function LoyaltySetup({ isOwner, branches }) {
     ),
     subTab === "tiers" && tiersUI,
     subTab === "streak" && streakUI,
-    subTab === "missions" && missionsUI
+    subTab === "missions" && missionsUI,
+    subTab === "referrals" && referralsUI
   );
 }
 
@@ -3952,7 +4026,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     try {
       var { initializeApp, deleteApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
       var { initializeAppCheck, ReCaptchaV3Provider } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check.js");
-      var { getFirestore, doc, getDoc, setDoc, addDoc, collection, onSnapshot, updateDoc, deleteDoc, serverTimestamp, getDocs, query, where, limit }
+      var { getFirestore, doc, getDoc, setDoc, addDoc, collection, onSnapshot, updateDoc, deleteDoc, serverTimestamp, getDocs, query, where, limit, orderBy }
         = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
       var { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword, sendPasswordResetEmail, updatePassword, setPersistence, browserLocalPersistence, browserSessionPersistence }
         = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
@@ -4241,6 +4315,27 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
             var res = await call({ customerUid: customerUid });
             return { ok: !!(res && res.data && res.data.ok), tier: (res && res.data && res.data.tier) || null };
           } catch(e){ window.__fbErr("tier recompute", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
+        },
+        // Phase 14 — referrals
+        getReferralConfig: async function(){
+          try { var s = await getDoc(doc(_db,"settings","referralConfig")); return s.exists() ? s.data() : null; } catch(e){ return null; }
+        },
+        onReferralConfigChange: function(cb){ return onSnapshot(doc(_db,"settings","referralConfig"), function(s){ cb(s.exists() ? s.data() : null); }); },
+        saveReferralConfig: async function(cfg){
+          try {
+            var call = httpsCallable(_fns, "saveReferralConfig");
+            var res = await call({ config: cfg });
+            return { ok: !!(res && res.data && res.data.ok) };
+          } catch(e){ window.__fbErr("referral config", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
+        },
+        // Aggregate report for the admin — reads recent referrals so the
+        // Loyalty tab can show "N qualified this week / SR K reward cost".
+        listRecentReferrals: async function(limitN){
+          try {
+            var q = query(collection(_db, "referrals"), orderBy("createdAt", "desc"), limit(limitN || 200));
+            var s = await getDocs(q);
+            return s.docs.map(function(d){ return Object.assign({ id: d.id }, d.data()); });
+          } catch(e){ window.__fbErr("referrals list", e); return []; }
         },
         // Upload a File/Blob to Storage and return its download URL. Path
         // must start with "items/" — that's the only prefix storage.rules
