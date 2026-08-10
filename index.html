@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.19.0";
+const APP_VERSION = "8.19.1";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -5298,21 +5298,18 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var _orig = window.FB.onOrdersChange;
       window.FB.onOrdersChange = function (cb) {
         return _orig.call(window.FB, function (orders) {
+          // Pass the FULL order through to the print pipeline. The earlier
+          // trimmed projection dropped couponCode / reward / totals /
+          // subtotal / refund / branchObj / pickupTime / note / overrides /
+          // loyaltyBalance — so auto-printed receipts lost the QR block
+          // and the itemized totals block that manual reprints get.
+          // Just top up the two fields the print module absolutely needs
+          // sensible defaults for, then hand the full doc down.
           handleIncomingOrders(orders.map(function(o){
-            return {
+            return Object.assign({}, o, {
               orderNo: o.orderNo || (o.fbId ? o.fbId.slice(-4) : "0000"),
-              date: o.date || new Date().toISOString(),
-              userName: o.userName || "Customer",
-              userPhone: o.userPhone || "",
-              items: o.items || [],
-              total: o.total || 0,
-              orderType: o.orderType || "pickup",
-              paymentMethod: o.paymentMethod || "cash",
               status: o.status || "new",
-              branch: o.branch || "",
-              locationLink: o.locationLink || "",
-              fbId: o.fbId,
-            };
+            });
           }));
           cb(orders);
         });
