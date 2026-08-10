@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.15.0";
+const APP_VERSION = "8.16.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -3268,26 +3268,10 @@ function App() {
       autoTimersRef.current[orderNo].forEach(clearTimeout);
       delete autoTimersRef.current[orderNo];
     }
-    // Fire the customer-side inbox notification for every real status
-    // transition — the customer app's NotificationsSheet picks it up live.
-    if (order && order.userPhone && window.FB && window.FB.sendNotification) {
-      const CUSTOMER_MSG = {
-        accepted:     { title: "Order accepted",          titleAr: "تم قبول الطلب",           body: "We got your order #" + order.orderNo + " — starting shortly.",                bodyAr: "استلمنا طلبك #" + order.orderNo + " — سنبدأ التحضير قريباً." },
-        preparing:    { title: "Your order is preparing",  titleAr: "طلبك قيد التحضير",        body: "Order #" + order.orderNo + " is being prepared. Will be ready in ~15 min.",    bodyAr: "طلبك #" + order.orderNo + " قيد التحضير الآن. سيكون جاهزاً خلال ~15 دقيقة." },
-        cooking:      { title: "Cooking your order",       titleAr: "يتم طبخ طلبك",            body: "Order #" + order.orderNo + " is cooking now! ~10 min remaining.",              bodyAr: "طلبك #" + order.orderNo + " يُطبخ الآن! متبقي ~10 دقائق." },
-        almost_ready: { title: "Almost ready!",            titleAr: "طلبك على وشك الجهوز!",    body: "Order #" + order.orderNo + " is almost ready! ~5 min remaining.",              bodyAr: "طلبك #" + order.orderNo + " على وشك الجهوز! متبقي ~5 دقائق." },
-        ready:        { title: "Your order is ready!",     titleAr: "طلبك جاهز!",              body: "Order #" + order.orderNo + " is ready — come collect it!",                    bodyAr: "طلبك #" + order.orderNo + " جاهز للاستلام — تفضل بالحضور!" },
-        completed:    { title: "Order completed",          titleAr: "تم إكمال الطلب",          body: "Thank you! Enjoy your Broast Albahr.",                                         bodyAr: "شكراً لك! نتمنى لك وجبة شهية." },
-        cancelled:    { title: "Order cancelled",          titleAr: "تم إلغاء الطلب",          body: "Order #" + order.orderNo + " was cancelled. Contact us if this was a mistake.", bodyAr: "تم إلغاء طلبك #" + order.orderNo + ". تواصل معنا إذا كان بالخطأ." },
-        refunded:     { title: "Refund issued",            titleAr: "تم إصدار الاسترجاع",     body: "Order #" + order.orderNo + " was refunded.",                                    bodyAr: "تم استرجاع طلبك #" + order.orderNo + "." },
-      };
-      // "done" is the legacy value the Complete button still writes; map it
-      // onto the completed message so finishing an order always notifies.
-      const msg = CUSTOMER_MSG[next === "done" ? "completed" : next];
-      if (msg) {
-        try { await window.FB.sendNotification(order.userPhone, Object.assign({ orderId: order.fbId, orderNo: order.orderNo, status: next }, msg)); } catch(_) {}
-      }
-    }
+    // Phase 9: server-side updateOrderStatus dispatches the matching
+    // notification (in-app inbox + FCM push if a token is registered).
+    // No inline admin dispatch needed here — that only risked drift and
+    // double-sends across retries.
     if (order && order.userPhone && (next === "preparing" || next === "ready")) {
       const ph = order.userPhone.startsWith("0") ? "966" + order.userPhone.slice(1) : order.userPhone;
       const sep = String.fromCharCode(10);
@@ -3334,19 +3318,10 @@ function App() {
     if (reason === null) return; // Cancel pressed
     setOrders(p => p.map(o => o.orderNo === order.orderNo ? {...o, status: "cancelled", declineReason: reason} : o));
     if (order.fbId && window.FB) {
-      // Route through the callable so the reason lands in statusHistory AND
-      // as top-level `declineReason` (the callable stamps both when
-      // status=cancelled + reason present).
+      // Phase 9: the updateOrderStatus callable dispatches order.cancelled
+      // via the server-side notification pipeline (dedup + push). No inline
+      // sendNotification needed here.
       try { await window.FB.updateOrderStatus(order.fbId, "cancelled", reason || ""); } catch(_) {}
-      // Push a matching customer-inbox notification.
-      if (order.userPhone && window.FB.sendNotification) {
-        try { await window.FB.sendNotification(order.userPhone, {
-          title: "Order declined", titleAr: "تم رفض الطلب",
-          body: "Order #" + order.orderNo + " was declined" + (reason ? ": " + reason : "."),
-          bodyAr: "تم رفض طلبك #" + order.orderNo + (reason ? ": " + reason : "."),
-          orderId: order.fbId, orderNo: order.orderNo, status: "cancelled",
-        }); } catch(_) {}
-      }
     }
     if (order.userPhone) {
       const ph = order.userPhone.startsWith("0") ? "966" + order.userPhone.slice(1) : order.userPhone;
@@ -3394,14 +3369,9 @@ function App() {
     if (!ok && window.FB && window.FB.updateOrderStatus) {
       ok = await window.FB.updateOrderStatus(order.fbId, "refunded", reason);
     }
-    if (ok && order.userPhone && window.FB && window.FB.sendNotification) {
-      try { await window.FB.sendNotification(order.userPhone, {
-        title: "Refund issued", titleAr: "تم إصدار الاسترجاع",
-        body: "Order #" + order.orderNo + " was refunded." + (reason ? " " + reason : ""),
-        bodyAr: "تم استرجاع طلبك #" + order.orderNo + "." + (reason ? " " + reason : ""),
-        orderId: order.fbId, orderNo: order.orderNo, status: "refunded",
-      }); } catch(_) {}
-    }
+    // Phase 9: refundOrder / updateOrderStatus already dispatch the
+    // matching order.refunded notification via the server. No inline
+    // sendNotification needed.
     if (!ok) alert("Refund failed. Check your connection and try again.");
   };
 
