@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.14.0";
+const APP_VERSION = "8.14.1";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -3361,14 +3361,27 @@ function App() {
 
   const handleOverride = async (order, amount, reason) => {
     if (!order || !order.fbId || !amount || !reason) return;
+    // Phase 5: `total` is a rules-protected field; the applyOrderOverride
+    // callable is the only path that can adjust it. It stamps the override
+    // entry (amount + reason + owner uid) and returns the new total, which
+    // we mirror into local state so the optimistic update matches the
+    // server truth. Falls back gracefully if the callable is not yet
+    // deployed — nothing happens, no silent partial write.
+    let ok = false;
+    let newTotal = Math.max(0, (order.total || 0) - amount);
+    if (window.FB && window.FB.applyOrderOverride) {
+      const res = await window.FB.applyOrderOverride(order.fbId, amount, reason);
+      ok = !!(res && res.ok);
+      if (ok && res.data && typeof res.data.total === "number") newTotal = res.data.total;
+    }
+    if (!ok) {
+      alert("Comp failed. Cloud Function may not be deployed yet — run: firebase deploy --only functions");
+      return;
+    }
     const by = (authUser && authUser.email) || "manager";
     const entry = { amount, reason, by, at: new Date().toISOString() };
     const nextOverrides = (order.overrides || []).concat([entry]);
-    const newTotal = Math.max(0, (order.total || 0) - amount);
     setOrders(p => p.map(o => o.orderNo === order.orderNo ? {...o, overrides: nextOverrides, total: newTotal} : o));
-    if (window.FB && window.FB.updateOrderFields) {
-      try { await window.FB.updateOrderFields(order.fbId, { overrides: nextOverrides, total: newTotal }); } catch(_) {}
-    }
     if (order.userPhone && window.FB && window.FB.sendNotification) {
       try { await window.FB.sendNotification(order.userPhone, {
         title: "Discount applied",
@@ -3806,6 +3819,17 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
             var res = await call({ orderId: id, reason: reason || undefined, amount: (amount != null ? Number(amount) : undefined) });
             return { ok: !!(res && res.data && res.data.ok), data: (res && res.data) || null };
           } catch(e) { window.__fbErr("refund order", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
+        },
+        // Owner-only comp/discount override. Phase 5 rules block direct
+        // writes to `total`/`totals`, so this callable is the only way to
+        // apply a comp on an existing order. Returns the new total on
+        // success; the caller updates local state from it.
+        applyOrderOverride: async function(id, amount, reason){
+          try {
+            var call = httpsCallable(_fns, "applyOrderOverride");
+            var res = await call({ orderId: id, amount: Number(amount), reason: String(reason || "") });
+            return { ok: !!(res && res.data && res.data.ok), data: (res && res.data) || null };
+          } catch(e) { window.__fbErr("apply override", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
         },
         updateOrderField: async function(id, field, value){ try{ var patch={}; patch[field]=value; patch.updatedAt=serverTimestamp(); await updateDoc(doc(_db,"orders",id), patch); return true; }catch(e){ window.__fbErr("order field",e); return false; } },
         updateOrderFields: async function(id, patch){ try{ await updateDoc(doc(_db,"orders",id), Object.assign({}, patch, { updatedAt: serverTimestamp() })); return true; }catch(e){ window.__fbErr("order fields",e); return false; } },
