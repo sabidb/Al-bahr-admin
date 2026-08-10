@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.21.0";
+const APP_VERSION = "8.22.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -2203,8 +2203,521 @@ function BranchesTabNew({ branches }) {
   );
 }
 
+// ── CUSTOMER 360° PROFILE PANEL ──
+// One-screen POS-style customer view. Renders when the cashier taps a
+// customer row (or the "Pull customer for order #" deep-lookup lands).
+// Every number below comes from real Firestore docs — no fabrication —
+// and every action either patches customers/{id} or writes a sibling
+// audit row.
+function CustomerOverview({ customer, allOrders, onBack, onReorder, onNewOrder, staff }) {
+  const [tab, setTab] = React.useState("overview");
+  const [notes, setNotes] = React.useState((customer && customer.notes) || []);
+  const [noteDraft, setNoteDraft] = React.useState("");
+  const [audit, setAudit] = React.useState([]);
+  const [live, setLive] = React.useState(customer || {});
+  const [busy, setBusy] = React.useState("");
+  const [editing, setEditing] = React.useState(false);
+  const [editForm, setEditForm] = React.useState({
+    name: (customer && customer.name) || "",
+    email: (customer && customer.email) || "",
+    dob: (customer && customer.dob) || "",
+    lang: (customer && customer.lang) || "ar",
+    prefBranch: (customer && customer.prefBranch) || "",
+  });
+  // Order-history filters — spec Phase 8.
+  const [ordFilter, setOrdFilter] = React.useState({ scope: "all", status: "all", branch: "all", sort: "newest" });
+
+  const idKey = (customer && (customer.id || customer.phone)) || "";
+  const isOwner = staff && (staff.role === "owner" || staff.role === "admin");
+  const isManagerPlus = isOwner || (staff && staff.role === "manager");
+
+  // Refresh audit + notes when the customer changes.
+  React.useEffect(() => {
+    setLive(customer || {});
+    setNotes((customer && customer.notes) || []);
+    setEditForm({
+      name: (customer && customer.name) || "",
+      email: (customer && customer.email) || "",
+      dob: (customer && customer.dob) || "",
+      lang: (customer && customer.lang) || "ar",
+      prefBranch: (customer && customer.prefBranch) || "",
+    });
+    if (window.FB && window.FB.getCustomerPointsAudit && idKey) {
+      window.FB.getCustomerPointsAudit(idKey, 20).then(setAudit);
+    }
+  }, [customer && customer.id, customer && customer.phone]);
+
+  // Every order for this customer, drawn from the already-live orders
+  // stream. Cheaper than an extra fetch and stays fresh on every write.
+  const myOrders = React.useMemo(() => {
+    const ph = customer && customer.phone;
+    if (!ph) return [];
+    return (allOrders || [])
+      .filter(o => o.userPhone === ph)
+      .sort((a, b) => {
+        const at = (a.createdAt && a.createdAt.seconds) || (a.date ? Date.parse(a.date)/1000 : 0);
+        const bt = (b.createdAt && b.createdAt.seconds) || (b.date ? Date.parse(b.date)/1000 : 0);
+        return bt - at;
+      });
+  }, [allOrders, customer && customer.phone]);
+
+  // Phase 4 stats — real numbers from real orders.
+  const stats = React.useMemo(() => {
+    const s = { total: 0, completed: 0, cancelled: 0, refunded: 0, spent: 0, first: null, last: null, coupons: 0 };
+    myOrders.forEach(o => {
+      s.total++;
+      const st = String(o.status || "").toLowerCase();
+      if (st === "done" || st === "ready" || st === "completed") s.completed++;
+      if (st === "cancelled" || st === "declined") s.cancelled++;
+      if (o.refund && Number(o.refund.amount) > 0) s.refunded++;
+      s.spent += Number(o.total) || 0;
+      if (o.couponCode) s.coupons++;
+      const t = (o.createdAt && o.createdAt.seconds ? o.createdAt.seconds*1000 : (o.date ? Date.parse(o.date) : 0));
+      if (t) {
+        if (!s.first || t < s.first) s.first = t;
+        if (!s.last  || t > s.last)  s.last  = t;
+      }
+    });
+    s.avg = s.total ? s.spent / s.total : 0;
+    return s;
+  }, [myOrders]);
+
+  // Phase 10 — branch history.
+  const byBranch = React.useMemo(() => {
+    const m = {};
+    myOrders.forEach(o => {
+      const b = o.branch || "unknown";
+      if (!m[b]) m[b] = { branch: b, count: 0, spent: 0, name: (o.branchObj && (o.branchObj.nameEn || o.branchObj.id)) || b };
+      m[b].count++;
+      m[b].spent += Number(o.total) || 0;
+    });
+    return Object.values(m).sort((a,b) => b.count - a.count);
+  }, [myOrders]);
+
+  // Phase 9 — favorites (from item history).
+  const favorites = React.useMemo(() => {
+    const m = {};
+    myOrders.forEach(o => (o.items || []).forEach(it => {
+      const k = it.name || "";
+      if (!m[k]) m[k] = { name: k, orders: 0, qty: 0 };
+      m[k].orders++;
+      m[k].qty += (it.qty || 1);
+    }));
+    return Object.values(m).sort((a,b) => b.orders - a.orders).slice(0, 10);
+  }, [myOrders]);
+
+  // Phase 11 — payment mix.
+  const byPayment = React.useMemo(() => {
+    const m = {};
+    myOrders.forEach(o => {
+      const p = o.paymentMethod || "cash";
+      if (!m[p]) m[p] = { method: p, count: 0, spent: 0 };
+      m[p].count++;
+      m[p].spent += Number(o.total) || 0;
+    });
+    return Object.values(m);
+  }, [myOrders]);
+
+  // Phase 17 — behavior analytics.
+  const behavior = React.useMemo(() => {
+    if (!myOrders.length) return null;
+    const spanDays = stats.first && stats.last ? Math.max(1, (stats.last - stats.first) / 86400000) : 1;
+    const freqPerWeek = (stats.total / spanDays) * 7;
+    const daysSince = stats.last ? Math.floor((Date.now() - stats.last) / 86400000) : null;
+    // Bucket typical ordering hour.
+    const hours = {};
+    myOrders.forEach(o => {
+      const t = (o.createdAt && o.createdAt.seconds ? o.createdAt.seconds*1000 : (o.date ? Date.parse(o.date) : 0));
+      if (!t) return;
+      const h = new Date(t).getHours();
+      hours[h] = (hours[h] || 0) + 1;
+    });
+    let peakH = null, peakN = 0;
+    Object.entries(hours).forEach(([h, n]) => { if (n > peakN) { peakN = n; peakH = Number(h); } });
+    const cancelRate = stats.total ? (stats.cancelled / stats.total) : 0;
+    return { freqPerWeek: freqPerWeek, daysSince: daysSince, peakH: peakH, cancelRate: cancelRate, favProduct: favorites[0] };
+  }, [myOrders, favorites, stats]);
+
+  // Phase 12 — loyalty snapshot. Points prefer server ledger mirror.
+  const points   = Number((live.points != null ? live.points : live.loyaltyPoints) || 0);
+  const lifetimeSpend  = Number(live.lifetimeSpend || 0);
+  const tierName = live.tierName || (live.tier && live.tier.tierName) || "Bronze";
+  const tierMult = Number(live.tierMult || (live.tier && live.tier.tierMult) || 1);
+  const nextTierMin = Number(live.nextTierMin || (live.tier && live.tier.nextTierMin) || 0);
+  const nextTierName = live.nextTierName || (live.tier && live.tier.nextTierName) || "";
+
+  // Phase 18 — alerts.
+  const alerts = React.useMemo(() => {
+    const out = [];
+    if (String(tierName).toLowerCase() === "vip" || String(tierName).toLowerCase() === "gold") out.push({ tone: "gold", text: "⭐ VIP customer" });
+    if (points > 100) out.push({ tone: "green", text: "🎁 " + points + " points redeemable" });
+    if (behavior && behavior.daysSince != null && behavior.daysSince > 60 && stats.total > 0) out.push({ tone: "red", text: "😴 No orders in " + behavior.daysSince + " days" });
+    if (live.blocked) out.push({ tone: "red", text: "⛔ Account blocked" });
+    return out;
+  }, [tierName, points, behavior, live.blocked, stats.total]);
+
+  // Phase 16 — activity timeline (orders + notes + audit merged, newest first).
+  const timeline = React.useMemo(() => {
+    const rows = [];
+    myOrders.forEach(o => {
+      const t = (o.createdAt && o.createdAt.seconds ? o.createdAt.seconds*1000 : (o.date ? Date.parse(o.date) : 0));
+      const st = String(o.status || "").toLowerCase();
+      const icon = st === "cancelled" ? "❌" : st === "done" ? "✅" : "🧾";
+      rows.push({ t: t, icon: icon, label: "Order #" + (o.orderNo || "—") + " — " + (st || "new") + " · SR " + (Number(o.total)||0).toFixed(2) });
+      if (o.couponCode) rows.push({ t: t, icon: "🎟️", label: "Coupon " + o.couponCode + " used" });
+      if (o.refund && Number(o.refund.amount) > 0) rows.push({ t: t + 1, icon: "💸", label: "Refund SR " + Number(o.refund.amount).toFixed(2) });
+    });
+    (notes || []).forEach(n => rows.push({ t: Date.parse(n.at || "") || 0, icon: "📝", label: (n.staffName || "Staff") + ": " + n.text }));
+    (audit || []).forEach(a => {
+      const t = (a.at && a.at.seconds) ? a.at.seconds*1000 : (a.at ? Date.parse(a.at) : 0);
+      rows.push({ t: t, icon: a.delta >= 0 ? "➕" : "➖", label: "Loyalty " + (a.delta >= 0 ? "+" : "") + a.delta + " pts — " + (a.reason || "manual") + " (" + (a.staffName || "staff") + ")" });
+    });
+    return rows.filter(r => r.t).sort((a,b) => b.t - a.t).slice(0, 60);
+  }, [myOrders, notes, audit]);
+
+  // Filtered order rows for the History tab (Phase 7 + 8).
+  const filteredOrders = React.useMemo(() => {
+    const now = Date.now();
+    const cutoff = ordFilter.scope === "today" ? now - 86400000
+                 : ordFilter.scope === "week"  ? now - 7*86400000
+                 : ordFilter.scope === "month" ? now - 30*86400000
+                 : 0;
+    let list = myOrders.filter(o => {
+      const t = (o.createdAt && o.createdAt.seconds ? o.createdAt.seconds*1000 : (o.date ? Date.parse(o.date) : 0));
+      if (cutoff && t < cutoff) return false;
+      if (ordFilter.branch !== "all" && o.branch !== ordFilter.branch) return false;
+      const st = String(o.status || "").toLowerCase();
+      if (ordFilter.status === "completed" && !(st === "done" || st === "ready" || st === "completed")) return false;
+      if (ordFilter.status === "cancelled" && !(st === "cancelled" || st === "declined")) return false;
+      if (ordFilter.status === "refunded"  && !(o.refund && Number(o.refund.amount) > 0)) return false;
+      return true;
+    });
+    if (ordFilter.sort === "high") list = list.slice().sort((a,b) => (Number(b.total)||0) - (Number(a.total)||0));
+    else if (ordFilter.sort === "low") list = list.slice().sort((a,b) => (Number(a.total)||0) - (Number(b.total)||0));
+    else if (ordFilter.sort === "oldest") list = list.slice().reverse();
+    return list;
+  }, [myOrders, ordFilter]);
+
+  const branchOptions = React.useMemo(() => Array.from(new Set(myOrders.map(o => o.branch).filter(Boolean))), [myOrders]);
+
+  // ── Handlers ────────────────────────────────────────────────
+  const saveNote = async () => {
+    const text = noteDraft.trim();
+    if (!text) return;
+    setBusy("note");
+    const res = await window.FB.addCustomerNote(idKey, text, staff);
+    setBusy("");
+    if (res && res.ok) {
+      setNotes(prev => prev.concat([res.entry]));
+      setNoteDraft("");
+    } else alert("Note failed: " + (res && res.error));
+  };
+
+  const adjustPoints = async (delta) => {
+    const reason = window.prompt(delta > 0 ? "Add " + delta + " pts — reason?" : "Deduct " + Math.abs(delta) + " pts — reason?", "");
+    if (reason == null) return;
+    setBusy("pts");
+    const res = await window.FB.adjustCustomerPoints(idKey, delta, reason, staff);
+    setBusy("");
+    if (res && res.ok) {
+      setLive(prev => Object.assign({}, prev, { points: res.next, loyaltyPoints: res.next }));
+      const rows = await window.FB.getCustomerPointsAudit(idKey, 20);
+      setAudit(rows);
+    } else alert("Adjust failed: " + (res && res.error));
+  };
+
+  const promptAdjust = () => {
+    const raw = window.prompt("Points delta (e.g. 25 or -10):", "");
+    const n = Math.round(Number(raw) || 0);
+    if (!n) return;
+    adjustPoints(n);
+  };
+
+  const saveEdit = async () => {
+    setBusy("edit");
+    const res = await window.FB.updateCustomerInfo(idKey, editForm);
+    setBusy("");
+    if (res && res.ok) {
+      setLive(prev => Object.assign({}, prev, editForm));
+      setEditing(false);
+    } else alert("Save failed: " + (res && res.error));
+  };
+
+  // ── Renderers ───────────────────────────────────────────────
+  const money = (n) => "SR " + (Number(n)||0).toFixed(2);
+  const fmtDate = (t) => t ? new Date(t).toLocaleDateString("en-GB") + " · " + new Date(t).toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" }) : "—";
+  const custId = "BA-CUS-" + String(idKey || "").slice(-6).padStart(6, "0");
+
+  const chip = (bg, fg, txt) => React.createElement("span", { style: { background: bg, color: fg, padding: "4px 10px", borderRadius: 999, fontSize: 11, fontWeight: 800 } }, txt);
+
+  const header = React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14, background: "linear-gradient(135deg,#fff,#FFF7ED)" } },
+    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 14 } },
+      React.createElement("div", { style: { width: 60, height: 60, borderRadius: 18, background: "linear-gradient(135deg,#E60000,#FF4500)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, color: "#fff", flexShrink: 0 } },
+        (live.name || "?").slice(0,1).toUpperCase()),
+      React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+        React.createElement("div", { style: { fontWeight: 800, fontSize: 18, color: "#1A1D27" } }, live.name || "Customer"),
+        React.createElement("div", { className: "mono", style: { fontSize: 13, color: "#6B7280", marginTop: 2 } }, live.phone),
+        React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", marginTop: 2 } }, custId),
+        React.createElement("div", { style: { marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 } },
+          chip("#FEF3C7", "#B45309", "🏆 " + tierName + (tierMult && tierMult !== 1 ? " (x" + tierMult + ")" : "")),
+          live.blocked ? chip("#FEE2E2", "#B91C1C", "⛔ Blocked") : chip("#DCFCE7", "#166534", "🟢 Active"),
+          chip("#EFF6FF", "#2563EB", "🎁 " + points + " pts"),
+          chip("#F3F4F6", "#374151", "SR " + stats.spent.toFixed(2) + " lifetime"),
+          stats.last && chip("#F0F9FF", "#075985", "Last: " + fmtDate(stats.last)),
+          byBranch[0] && chip("#F5F3FF", "#6D28D9", "Fav branch: " + byBranch[0].name)
+        )
+      )
+    ),
+    alerts.length > 0 && React.createElement("div", { style: { marginTop: 12, display: "flex", flexWrap: "wrap", gap: 6 } },
+      alerts.map((a, i) => {
+        const tones = { gold: ["#FEF3C7","#92400E"], green: ["#DCFCE7","#166534"], red: ["#FEE2E2","#B91C1C"] };
+        const c = tones[a.tone] || tones.gold;
+        return chip(c[0], c[1], a.text);
+      })
+    )
+  );
+
+  const statCard = (icon, label, value) => React.createElement("div", { className: "card", style: { padding: 12, textAlign: "center" } },
+    React.createElement("div", { style: { fontSize: 20 } }, icon),
+    React.createElement("div", { style: { fontSize: 10, color: "#6B7280", fontWeight: 700, marginTop: 4, textTransform: "uppercase", letterSpacing: 0.4 } }, label),
+    React.createElement("div", { style: { fontSize: 15, fontWeight: 800, color: "#1A1D27", marginTop: 2 } }, value)
+  );
+
+  const statsGrid = React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(120px,1fr))", gap: 8, marginBottom: 14 } },
+    statCard("📦", "Total orders", stats.total),
+    statCard("✅", "Completed", stats.completed),
+    statCard("❌", "Cancelled", stats.cancelled),
+    statCard("💵", "Total spent", money(stats.spent)),
+    statCard("📊", "Avg order", money(stats.avg)),
+    statCard("🎁", "Points", points),
+    statCard("🎟️", "Coupons used", stats.coupons),
+    statCard("🕒", "First order", stats.first ? new Date(stats.first).toLocaleDateString("en-GB") : "—"),
+    statCard("🕓", "Last order", stats.last ? new Date(stats.last).toLocaleDateString("en-GB") : "—"),
+  );
+
+  const actionBtn = (bg, fg, label, onClick, disabled) => React.createElement("button", {
+    onClick: onClick, disabled: !!disabled,
+    style: { background: bg, color: fg, border: "none", padding: "12px 14px", borderRadius: 14, fontSize: 13, fontWeight: 800, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.6 : 1, minHeight: 44 }
+  }, label);
+
+  const quickActions = React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(160px,1fr))", gap: 8, marginBottom: 14 } },
+    actionBtn("linear-gradient(135deg,#059669,#10B981)", "#fff", "➕ Create new order", onNewOrder),
+    actionBtn("#FEF3C7", "#B45309", "🎁 Add points", () => adjustPoints(+25)),
+    actionBtn("#FEE2E2", "#B91C1C", "➖ Deduct points", () => adjustPoints(-25), !isManagerPlus),
+    actionBtn("#EFF6FF", "#2563EB", "🔁 Reorder last", () => myOrders[0] && onReorder && onReorder(myOrders[0]), !myOrders.length),
+    actionBtn("#F3F4F6", "#374151", "✏️ Custom adjust", promptAdjust, !isManagerPlus),
+    actionBtn("#F5F3FF", "#6D28D9", "🖨 Print last invoice", () => myOrders[0] && window.QZPrint && window.QZPrint.reprintOrder && window.QZPrint.reprintOrder(myOrders[0]), !myOrders.length),
+  );
+
+  const tabBtn = (id, label) => React.createElement("button", {
+    onClick: () => setTab(id),
+    style: {
+      background: tab === id ? "#1A1D27" : "#F3F4F6",
+      color: tab === id ? "#fff" : "#374151",
+      border: "none", padding: "10px 14px", borderRadius: 12, fontSize: 12, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap"
+    }
+  }, label);
+  const tabs = React.createElement("div", { style: { display: "flex", gap: 6, overflowX: "auto", marginBottom: 14, paddingBottom: 4 } },
+    tabBtn("overview", "Overview"),
+    tabBtn("history", "Orders"),
+    tabBtn("favorites", "Favorites"),
+    tabBtn("branches", "Branches"),
+    tabBtn("payments", "Payments"),
+    tabBtn("loyalty", "Loyalty"),
+    tabBtn("info", "Info"),
+    tabBtn("notes", "Notes"),
+    tabBtn("timeline", "Timeline"),
+    tabBtn("behavior", "Behavior"),
+  );
+
+  const sectionTitle = (icon, label) => React.createElement("div", { style: { fontSize: 13, fontWeight: 800, color: "#1A1D27", margin: "8px 0" } }, icon + " " + label);
+
+  const orderRow = (o) => {
+    const t = (o.createdAt && o.createdAt.seconds ? o.createdAt.seconds*1000 : (o.date ? Date.parse(o.date) : 0));
+    const st = String(o.status || "new").toLowerCase();
+    const scMap = { new: "#F97316", preparing: "#D97706", ready: "#059669", done: "#2563EB", cancelled: "#B91C1C" };
+    return React.createElement("div", { key: o.fbId || o.orderNo, className: "card", style: { padding: 12, marginBottom: 8 } },
+      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 } },
+        React.createElement("div", { style: { minWidth: 0, flex: 1 } },
+          React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+            React.createElement("span", { className: "mono", style: { fontWeight: 800, fontSize: 13 } }, "#" + (o.orderNo || "—")),
+            React.createElement("span", { style: { fontSize: 10, background: (scMap[st]||"#6B7280")+"20", color: scMap[st]||"#6B7280", padding: "2px 8px", borderRadius: 999, fontWeight: 700 } }, st),
+            o.branch && React.createElement("span", { style: { fontSize: 10, color: "#6B7280" } }, "• " + ((o.branchObj && o.branchObj.nameEn) || o.branch)),
+            o.paymentMethod && React.createElement("span", { style: { fontSize: 10, color: "#6B7280" } }, "• " + o.paymentMethod),
+            o.couponCode && React.createElement("span", { style: { fontSize: 10, color: "#B45309" } }, "🎟️ " + o.couponCode)
+          ),
+          React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", marginTop: 4 } }, fmtDate(t)),
+          React.createElement("div", { style: { fontSize: 12, color: "#374151", marginTop: 4 } }, (o.items||[]).map(it => (it.qty||1)+"× "+it.name).join(", "))
+        ),
+        React.createElement("div", { style: { textAlign: "right", flexShrink: 0 } },
+          React.createElement("div", { style: { fontWeight: 800, color: "#E60000", fontSize: 15 } }, money(o.total)),
+          React.createElement("div", { style: { display: "flex", gap: 4, marginTop: 6, justifyContent: "flex-end" } },
+            React.createElement("button", { onClick: () => onReorder && onReorder(o), style: { background: "#EFF6FF", color: "#2563EB", border: "none", padding: "5px 9px", borderRadius: 8, fontSize: 10, fontWeight: 700, cursor: "pointer" } }, "🔁 Reorder"),
+            window.QZPrint && window.QZPrint.reprintOrder && React.createElement("button", { onClick: () => window.QZPrint.reprintOrder(o), style: { background: "#F5F3FF", color: "#6D28D9", border: "none", padding: "5px 9px", borderRadius: 8, fontSize: 10, fontWeight: 700, cursor: "pointer" } }, "🖨 Print")
+          )
+        )
+      )
+    );
+  };
+
+  // ── Tab bodies ──────────────────────────────────────────────
+  let body;
+  if (tab === "overview") {
+    body = React.createElement("div", null,
+      statsGrid,
+      quickActions,
+      sectionTitle("📋", "Recent orders"),
+      myOrders.slice(0,5).map(orderRow),
+      myOrders.length === 0 && React.createElement("div", { className: "card", style: { padding: 28, textAlign: "center", color: "#9CA3AF" } }, "No orders yet"),
+      sectionTitle("🍽", "Top favorites"),
+      favorites.length === 0
+        ? React.createElement("div", { className: "card", style: { padding: 20, textAlign: "center", color: "#9CA3AF" } }, "Not enough data")
+        : favorites.slice(0,4).map(f => React.createElement("div", { key: f.name, className: "card", style: { padding: 10, marginBottom: 6, display: "flex", justifyContent: "space-between" } },
+            React.createElement("span", { style: { fontSize: 13, fontWeight: 700 } }, f.name),
+            React.createElement("span", { style: { fontSize: 12, color: "#6B7280" } }, f.orders + " orders · " + f.qty + " units")
+          ))
+    );
+  } else if (tab === "history") {
+    body = React.createElement("div", null,
+      React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 } },
+        ["all","today","week","month"].map(s => React.createElement("button", { key: s, onClick: () => setOrdFilter(p => Object.assign({}, p, { scope: s })),
+          style: { background: ordFilter.scope === s ? "#1A1D27" : "#F3F4F6", color: ordFilter.scope === s ? "#fff" : "#374151", border: "none", padding: "6px 12px", borderRadius: 999, fontSize: 11, fontWeight: 800, cursor: "pointer" } }, s.toUpperCase())),
+        ["all","completed","cancelled","refunded"].map(s => React.createElement("button", { key: "st"+s, onClick: () => setOrdFilter(p => Object.assign({}, p, { status: s })),
+          style: { background: ordFilter.status === s ? "#B91C1C" : "#F3F4F6", color: ordFilter.status === s ? "#fff" : "#374151", border: "none", padding: "6px 12px", borderRadius: 999, fontSize: 11, fontWeight: 800, cursor: "pointer" } }, s)),
+        React.createElement("select", { value: ordFilter.branch, onChange: e => setOrdFilter(p => Object.assign({}, p, { branch: e.target.value })), className: "inp", style: { padding: "6px 10px", fontSize: 12, width: "auto" } },
+          React.createElement("option", { value: "all" }, "All branches"),
+          branchOptions.map(b => React.createElement("option", { key: b, value: b }, b))),
+        React.createElement("select", { value: ordFilter.sort, onChange: e => setOrdFilter(p => Object.assign({}, p, { sort: e.target.value })), className: "inp", style: { padding: "6px 10px", fontSize: 12, width: "auto" } },
+          React.createElement("option", { value: "newest" }, "Newest"),
+          React.createElement("option", { value: "oldest" }, "Oldest"),
+          React.createElement("option", { value: "high" }, "Highest value"),
+          React.createElement("option", { value: "low" }, "Lowest value"))
+      ),
+      filteredOrders.length === 0
+        ? React.createElement("div", { className: "card", style: { padding: 30, textAlign: "center", color: "#9CA3AF" } }, "No orders match")
+        : filteredOrders.map(orderRow)
+    );
+  } else if (tab === "favorites") {
+    body = favorites.length === 0
+      ? React.createElement("div", { className: "card", style: { padding: 30, textAlign: "center", color: "#9CA3AF" } }, "Not enough order history yet")
+      : React.createElement("div", null,
+          favorites.map(f => React.createElement("div", { key: f.name, className: "card", style: { padding: 12, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" } },
+            React.createElement("div", null,
+              React.createElement("div", { style: { fontWeight: 800, fontSize: 14 } }, f.name),
+              React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginTop: 2 } }, f.orders + " orders · " + f.qty + " units total"))
+          )));
+  } else if (tab === "branches") {
+    body = byBranch.length === 0
+      ? React.createElement("div", { className: "card", style: { padding: 30, textAlign: "center", color: "#9CA3AF" } }, "No branch activity yet")
+      : React.createElement("div", null,
+          React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 8 } }, "Most visited: " + byBranch[0].name),
+          byBranch.map(b => React.createElement("div", { key: b.branch, className: "card", style: { padding: 12, marginBottom: 8, display: "flex", justifyContent: "space-between" } },
+            React.createElement("div", { style: { fontWeight: 800 } }, b.name),
+            React.createElement("div", { style: { textAlign: "right" } },
+              React.createElement("div", { style: { fontSize: 13 } }, b.count + " orders"),
+              React.createElement("div", { style: { fontSize: 12, color: "#E60000", fontWeight: 800 } }, money(b.spent))))))
+  } else if (tab === "payments") {
+    body = byPayment.length === 0
+      ? React.createElement("div", { className: "card", style: { padding: 30, textAlign: "center", color: "#9CA3AF" } }, "No payments yet")
+      : byPayment.map(p => React.createElement("div", { key: p.method, className: "card", style: { padding: 12, marginBottom: 8, display: "flex", justifyContent: "space-between" } },
+          React.createElement("div", { style: { fontWeight: 800, textTransform: "uppercase" } }, p.method),
+          React.createElement("div", { style: { textAlign: "right" } },
+            React.createElement("div", { style: { fontSize: 12 } }, p.count + " orders"),
+            React.createElement("div", { style: { fontSize: 13, color: "#E60000", fontWeight: 800 } }, money(p.spent)))));
+  } else if (tab === "loyalty") {
+    const remain = nextTierMin ? Math.max(0, nextTierMin - lifetimeSpend) : 0;
+    body = React.createElement("div", null,
+      React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 12, background: "linear-gradient(135deg,#FEF3C7,#FFF7ED)" } },
+        React.createElement("div", { style: { fontSize: 26, fontWeight: 800, color: "#B45309" } }, "🏆 " + tierName),
+        React.createElement("div", { style: { fontSize: 28, fontWeight: 800, marginTop: 6 } }, points + " pts"),
+        React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 4 } }, "Lifetime spend: " + money(lifetimeSpend)),
+        nextTierName && React.createElement("div", { style: { fontSize: 12, color: "#B45309", marginTop: 4, fontWeight: 700 } }, remain + " to " + nextTierName)
+      ),
+      React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 } },
+        actionBtn("#DCFCE7","#166534","➕ Add 25 pts", () => adjustPoints(+25)),
+        actionBtn("#DCFCE7","#166534","➕ Add 100 pts", () => adjustPoints(+100), !isManagerPlus),
+        actionBtn("#FEE2E2","#B91C1C","➖ Deduct 25 pts", () => adjustPoints(-25), !isManagerPlus),
+        actionBtn("#F3F4F6","#374151","✏️ Custom", promptAdjust, !isManagerPlus)
+      ),
+      sectionTitle("📜", "Points history"),
+      audit.length === 0
+        ? React.createElement("div", { className: "card", style: { padding: 20, textAlign: "center", color: "#9CA3AF" } }, "No manual adjustments yet")
+        : audit.map(a => React.createElement("div", { key: a.id, className: "card", style: { padding: 10, marginBottom: 6 } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between" } },
+              React.createElement("span", { style: { fontWeight: 800, color: a.delta >= 0 ? "#166534" : "#B91C1C" } }, (a.delta >= 0 ? "+" : "") + a.delta + " pts"),
+              React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, a.staffName || "staff")),
+            React.createElement("div", { style: { fontSize: 11, color: "#374151", marginTop: 2 } }, a.reason || "manual"),
+            React.createElement("div", { style: { fontSize: 10, color: "#9CA3AF", marginTop: 2 } }, a.previous + " → " + a.next)))
+    );
+  } else if (tab === "info") {
+    const row = (label, key, type) => React.createElement("div", { key: key, style: { marginBottom: 10 } },
+      React.createElement("label", { style: { fontSize: 10, color: "#6B7280", fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.4, display: "block", marginBottom: 4 } }, label),
+      editing
+        ? React.createElement("input", { className: "inp", type: type || "text", value: editForm[key] || "", onChange: e => setEditForm(p => Object.assign({}, p, { [key]: e.target.value })) })
+        : React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "#1A1D27" } }, live[key] || "—")
+    );
+    body = React.createElement("div", { className: "card", style: { padding: 16 } },
+      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
+        React.createElement("div", { style: { fontWeight: 800 } }, "Profile"),
+        editing
+          ? React.createElement("div", { style: { display: "flex", gap: 6 } },
+              React.createElement("button", { onClick: () => setEditing(false), style: { background: "#F3F4F6", border: "none", padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12 } }, "Cancel"),
+              React.createElement("button", { onClick: saveEdit, disabled: busy === "edit", style: { background: "#059669", color: "#fff", border: "none", padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700 } }, busy === "edit" ? "Saving…" : "Save"))
+          : React.createElement("button", { onClick: () => setEditing(true), style: { background: "#EFF6FF", color: "#2563EB", border: "none", padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700 } }, "✏️ Edit")
+      ),
+      row("Name", "name"),
+      row("Email", "email", "email"),
+      row("Date of birth", "dob", "date"),
+      row("Preferred language", "lang"),
+      row("Preferred branch", "prefBranch"),
+      React.createElement("div", { style: { marginTop: 12, paddingTop: 12, borderTop: "1px solid #F3F4F6", fontSize: 11, color: "#9CA3AF" } },
+        "Registered: " + (live.createdAt && live.createdAt.toDate ? live.createdAt.toDate().toLocaleDateString("en-GB") : (live.registeredAt || "—")))
+    );
+  } else if (tab === "notes") {
+    body = React.createElement("div", null,
+      React.createElement("div", { className: "card", style: { padding: 12, marginBottom: 12 } },
+        React.createElement("textarea", { className: "inp", rows: 3, value: noteDraft, onChange: e => setNoteDraft(e.target.value), placeholder: "Internal note (customer never sees this)…" }),
+        React.createElement("button", { onClick: saveNote, disabled: busy === "note" || !noteDraft.trim(), style: { marginTop: 8, background: "#1A1D27", color: "#fff", border: "none", padding: "8px 14px", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, busy === "note" ? "Saving…" : "Add note")
+      ),
+      notes.length === 0
+        ? React.createElement("div", { className: "card", style: { padding: 24, textAlign: "center", color: "#9CA3AF" } }, "No staff notes yet")
+        : notes.slice().reverse().map((n, i) => React.createElement("div", { key: i, className: "card", style: { padding: 12, marginBottom: 6 } },
+            React.createElement("div", { style: { fontSize: 13, color: "#1A1D27" } }, n.text),
+            React.createElement("div", { style: { fontSize: 10, color: "#9CA3AF", marginTop: 4 } }, (n.staffName || "staff") + " · " + (n.at ? new Date(n.at).toLocaleString("en-GB") : ""))))
+    );
+  } else if (tab === "timeline") {
+    body = timeline.length === 0
+      ? React.createElement("div", { className: "card", style: { padding: 30, textAlign: "center", color: "#9CA3AF" } }, "No activity yet")
+      : timeline.map((r, i) => React.createElement("div", { key: i, className: "card", style: { padding: 10, marginBottom: 6, display: "flex", gap: 10 } },
+          React.createElement("div", { style: { fontSize: 18 } }, r.icon),
+          React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+            React.createElement("div", { style: { fontSize: 12, color: "#1A1D27" } }, r.label),
+            React.createElement("div", { style: { fontSize: 10, color: "#9CA3AF", marginTop: 2 } }, fmtDate(r.t)))
+        ));
+  } else if (tab === "behavior") {
+    body = !behavior
+      ? React.createElement("div", { className: "card", style: { padding: 30, textAlign: "center", color: "#9CA3AF" } }, "Not enough data yet")
+      : React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))", gap: 8 } },
+          statCard("📅", "Frequency / week", behavior.freqPerWeek.toFixed(2)),
+          statCard("💵", "Avg order", money(stats.avg)),
+          statCard("🍽", "Favorite product", (behavior.favProduct && behavior.favProduct.name) || "—"),
+          statCard("🏪", "Preferred branch", (byBranch[0] && byBranch[0].name) || "—"),
+          statCard("🕐", "Typical hour", behavior.peakH == null ? "—" : (behavior.peakH + ":00")),
+          statCard("⏳", "Days since last", behavior.daysSince == null ? "—" : behavior.daysSince),
+          statCard("❌", "Cancel rate", (behavior.cancelRate*100).toFixed(1) + "%"),
+        );
+  }
+
+  return React.createElement("div", null,
+    React.createElement("button", { onClick: onBack, style: { display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", color: "#6B7280", cursor: "pointer", fontSize: 14, fontWeight: 700, marginBottom: 12, padding: 0 } }, "← Back to search"),
+    header,
+    tabs,
+    body
+  );
+}
+
 // ── CUSTOMERS TAB ──
-function CustomersTabNew({ customers, orders }) {
+function CustomersTabNew({ customers, orders, staff, onReorder, onNewOrder }) {
   const [search, setSearch] = React.useState("");
   const [historyCustomer, setHistoryCustomer] = React.useState(null);
   const [customerOrders, setCustomerOrders] = React.useState([]);
@@ -2297,8 +2810,18 @@ function CustomersTabNew({ customers, orders }) {
     } finally { setLookupBusy(false); }
   };
 
-  // Customer history view
-  if (historyCustomer) return React.createElement("div", null,
+  // Customer 360° profile — full POS-style panel per spec.
+  if (historyCustomer) return React.createElement(CustomerOverview, {
+    customer: historyCustomer,
+    allOrders: orders,
+    staff: staff,
+    onBack: () => setHistoryCustomer(null),
+    onReorder: (o) => onReorder && onReorder(o, historyCustomer),
+    onNewOrder: () => onNewOrder && onNewOrder(historyCustomer)
+  });
+
+  // Legacy history view kept below for reference — unreachable now.
+  if (false) return React.createElement("div", null,
     React.createElement("button", {
       onClick: () => setHistoryCustomer(null),
       style: { display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", color: "#6B7280", cursor: "pointer", fontSize: 14, fontWeight: 600, marginBottom: 16, padding: 0 }
@@ -4062,7 +4585,12 @@ function App() {
       tab === "menu" && React.createElement(MenuTabNew, { menu: menu, setMenu: updateMenu, isOwner: isOwner, branches: BRANCHES, branchScope: branchScope }),
       tab === "offers" && isOwner && React.createElement(OffersTabNew, null),
       tab === "coupons" && isOwner && React.createElement(CouponsTabNew, null),
-      tab === "customers" && React.createElement(CustomersTabNew, { customers: customers, orders: orders }),
+      tab === "customers" && React.createElement(CustomersTabNew, {
+        customers: customers, orders: orders,
+        staff: { uid: authUser && authUser.uid, name: (profile && (profile.name || profile.email)) || (authUser && authUser.email) || "", role: (profile && profile.role) || "cashier" },
+        onNewOrder: (c) => { try { window.__prefillCustomer = { name: c.name, phone: c.phone }; } catch(_){} setTab("orders"); },
+        onReorder: (o) => { try { window.__prefillCustomer = { name: o.userName, phone: o.userPhone, reorderItems: o.items }; } catch(_){} setTab("orders"); }
+      }),
       tab === "branches" && isOwner && React.createElement(BranchesTabNew, { branches: branchList }),
       tab === "settings" && React.createElement(SettingsTabNew, { isOwner: isOwner, branches: BRANCHES, branchScope: branchScope, doLogout: doLogout, authEmail: authUser && authUser.email })
     ),
@@ -4103,7 +4631,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     try {
       var { initializeApp, deleteApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
       var { initializeAppCheck, ReCaptchaV3Provider } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check.js");
-      var { getFirestore, doc, getDoc, setDoc, addDoc, collection, onSnapshot, updateDoc, deleteDoc, serverTimestamp, getDocs, query, where, limit, orderBy }
+      var { getFirestore, doc, getDoc, setDoc, addDoc, collection, onSnapshot, updateDoc, deleteDoc, serverTimestamp, getDocs, query, where, limit, orderBy, arrayUnion, increment }
         = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
       var { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword, sendPasswordResetEmail, updatePassword, setPersistence, browserLocalPersistence, browserSessionPersistence }
         = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
@@ -4248,6 +4776,64 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         saveTenant: async function(d){ try{ await setDoc(doc(_db,"settings","tenant"), Object.assign({}, d, { updatedAt: serverTimestamp() }), { merge: true }); return true; }catch(e){ window.__fbErr("tenant",e); return false; } },
         onTenantChange: function(cb){ return onSnapshot(doc(_db,"settings","tenant"), function(s){ cb(s.exists() ? s.data() : null); }); },
         saveCustomer: async function(d){ try{ await setDoc(doc(_db,"customers",d.phone),Object.assign({},d,{lastSeen:serverTimestamp()}),{merge:true}); }catch(e){} },
+        // Customer 360° panel — patch editable profile fields on the doc
+        // that CustomersTabNew opened (keyed by id when known, phone fallback).
+        updateCustomerInfo: async function(idOrPhone, patch){
+          try {
+            var ref = doc(_db,"customers", idOrPhone);
+            await setDoc(ref, Object.assign({}, patch, { updatedAt: serverTimestamp() }), { merge: true });
+            return { ok: true };
+          } catch(e){ window.__fbErr("updateCustomerInfo", e); return { ok: false, error: (e && e.message) || String(e) }; }
+        },
+        // Append an internal staff note on customers/{id}.notes[]. Never
+        // surfaced in the customer app. Includes staff attribution + timestamp
+        // so a manager reviewing the panel later can see who wrote what.
+        addCustomerNote: async function(idOrPhone, note, staff){
+          try {
+            var entry = {
+              text: String(note || "").slice(0, 500),
+              staffUid: (staff && staff.uid) || "",
+              staffName: (staff && staff.name) || "",
+              at: new Date().toISOString()
+            };
+            var ref = doc(_db,"customers", idOrPhone);
+            await setDoc(ref, { notes: arrayUnion(entry) }, { merge: true });
+            return { ok: true, entry: entry };
+          } catch(e){ window.__fbErr("addCustomerNote", e); return { ok: false, error: (e && e.message) || String(e) }; }
+        },
+        // Manual loyalty adjustment — writes an audit doc under
+        // customers/{id}/pointsAudit and bumps points via increment. Server
+        // ledger callable is preferred for production balances (Phase 12),
+        // but that requires a callable that credits admin adjustments — this
+        // path is here so a cashier can nudge points from the panel today.
+        adjustCustomerPoints: async function(idOrPhone, delta, reason, staff){
+          try {
+            var d = Math.round(Number(delta) || 0);
+            if (!d) return { ok: false, error: "zero-delta" };
+            var custRef = doc(_db,"customers", idOrPhone);
+            var snap = await getDoc(custRef);
+            var prev = snap.exists() ? (Number(snap.data().points) || Number(snap.data().loyaltyPoints) || 0) : 0;
+            var auditRef = doc(collection(_db,"customers", idOrPhone, "pointsAudit"));
+            await setDoc(auditRef, {
+              delta: d,
+              previous: prev,
+              next: prev + d,
+              reason: String(reason || "").slice(0, 200),
+              staffUid: (staff && staff.uid) || "",
+              staffName: (staff && staff.name) || "",
+              at: serverTimestamp()
+            });
+            await setDoc(custRef, { points: increment(d), loyaltyPoints: increment(d), updatedAt: serverTimestamp() }, { merge: true });
+            return { ok: true, previous: prev, next: prev + d };
+          } catch(e){ window.__fbErr("adjustCustomerPoints", e); return { ok: false, error: (e && e.message) || String(e) }; }
+        },
+        // Recent pointsAudit rows for the timeline / activity feed.
+        getCustomerPointsAudit: async function(idOrPhone, n){
+          try {
+            var qs = await getDocs(query(collection(_db,"customers", idOrPhone, "pointsAudit"), orderBy("at","desc"), limit(Number(n)||20)));
+            return qs.docs.map(function(d){ return Object.assign({ id: d.id }, d.data()); });
+          } catch(e){ return []; }
+        },
         getAccounts: async function(){ try{ var s=await getDoc(doc(_db,"settings","accounts")); return s.exists()?s.data():null; }catch(e){ return null; } },
         saveAccounts: async function(a){ try{ await setDoc(doc(_db,"settings","accounts"),Object.assign({},a,{updatedAt:serverTimestamp()}),{merge:true}); return true; }catch(e){ window.__fbErr("accounts",e); return false; } },
         onAccountsChange: function(cb){ return onSnapshot(doc(_db,"settings","accounts"),function(s){ if(s.exists())cb(s.data()); }); },
@@ -5612,7 +6198,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       setInvoiceConfig: function (cfg) { setInvoiceConfig(cfg); },
       getInvoiceDefaults: function () { return Object.assign({}, INVOICE_DEFAULTS); },
       // Manual browser-only print — for testing the Windows fallback path.
-      browserPrint: function (order) { return browserPrint(order); }
+      browserPrint: function (order) { return browserPrint(order); },
+      // Customer 360° panel calls this to reprint a past order silently.
+      reprintOrder: function (order) { return reprintOrder(order); },
+      printOrder:   function (order) { return printOrder(order); }
     };
   })();
   </script>
