@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.16.0";
+const APP_VERSION = "8.17.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -1054,7 +1054,10 @@ function InvoiceSetup({ isOwner, branches, branchScope }) {
       items: [{ emoji: "🍗", name: "Broast 4 Pcs", nameAr: "بروست 4 قطع", qty: 1, price: 18 },
               { emoji: "🍟", name: "French Fries", nameAr: "بطاطس", qty: 1, price: 6 }],
       subtotal: 24, platformFee: 0.72, vat: 3.71, total: 28.43,
-      date: new Date().toISOString()
+      date: new Date().toISOString(),
+      // Preview the reward QR block so operators can eyeball placement + size
+      // before real reward orders start coming through.
+      reward: { code: "ALB9K4XQ72PZ", label: "Free Fries next order" }
     });
   };
 
@@ -4019,6 +4022,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
        QZ TRAY THERMAL PRINTING — Broast Albahr Admin
        ════════════════════════════════════════════════════ -->
   <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
   <script>
   // ── QZ Tray Thermal Print Module ──────────────────────────
   window.ThermalPrint = (function () {
@@ -4208,6 +4212,41 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       return str.replace(/\s+/g, " ").trim();
     }
 
+    // ── ESC/POS QR code helper ──────────────────────────────
+    // Emits the ESC/POS "GS ( k" command sequence to render a QR on any
+    // 58/80mm thermal printer with QR firmware (universal on Epson clones
+    // like PP9000EU/Xprinter/Bixolon). `data` is the payload the customer
+    // scans — for coupons we use the opaque coupon/reward code, never the
+    // discount value (Phase 11 rule).
+    //   size = module dot size 1..16 (8 ≈ 45mm across on 80mm paper)
+    //   ec   = error correction: 48=L, 49=M (default), 50=Q, 51=H
+    function escposQR(data, size, ec) {
+      if (data == null) return "";
+      var str = String(data);
+      if (!str) return "";
+      var GS = "\x1D";
+      var sz = Math.max(1, Math.min(16, Number(size) || 8));
+      var el = (ec === 48 || ec === 49 || ec === 50 || ec === 51) ? ec : 49;
+      // Encode to UTF-8 bytes so multi-byte characters count correctly for pL/pH.
+      var bytes;
+      try { bytes = unescape(encodeURIComponent(str)); }
+      catch (_) { bytes = str; }
+      var out = "";
+      // Model: cn=49, fn=65, n1=50 (model 2), n2=0
+      out += GS + "(k\x04\x00\x31\x41\x32\x00";
+      // Module size: cn=49, fn=67, n=size
+      out += GS + "(k\x03\x00\x31\x43" + String.fromCharCode(sz);
+      // Error correction: cn=49, fn=69, n=level
+      out += GS + "(k\x03\x00\x31\x45" + String.fromCharCode(el);
+      // Store data: cn=49, fn=80, m=48, then payload
+      var len = bytes.length + 3;
+      var pL = len & 0xFF, pH = (len >> 8) & 0xFF;
+      out += GS + "(k" + String.fromCharCode(pL) + String.fromCharCode(pH) + "\x31\x50\x30" + bytes;
+      // Print: cn=49, fn=81, m=48
+      out += GS + "(k\x03\x00\x31\x51\x30";
+      return out;
+    }
+
     // ── Build ESC/POS receipt ───────────────────────────────
     function buildReceipt(order) {
       var C = resolveConfig(order.branch);
@@ -4377,10 +4416,22 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       // Phase 11 reward slot — Phase 10/11 stamps order.reward on eligible
       // orders. Reserving the block now so the kitchen ticket layout doesn't
       // change when rewards ship. Silent when absent.
+      // The QR carries the opaque token only (never the discount value) so
+      // customers can scan-to-redeem at their next visit; the code below it
+      // is a manual fallback for damaged prints.
       if (order.reward && order.reward.code) {
         lines.push(CENTER + BOLD_ON + "REWARD CODE" + BOLD_OFF + LF);
+        lines.push(CENTER + escposQR(order.reward.code, 8, 50) + LF);
         lines.push(CENTER + TALL + BOLD_ON + stripEmoji(order.reward.code) + BOLD_OFF + LF + NORMAL);
         if (order.reward.label) lines.push(CENTER + stripEmoji(order.reward.label) + LF);
+        lines.push(CENTER + "Scan to redeem" + LF);
+        lines.push(LEFT + line("-"));
+      } else if (order.couponCode) {
+        // Coupon applied to this order — reprint it as a scannable QR so the
+        // counter can verify at hand-off without the customer typing the code.
+        lines.push(CENTER + BOLD_ON + "COUPON" + BOLD_OFF + LF);
+        lines.push(CENTER + escposQR(order.couponCode, 7, 50) + LF);
+        lines.push(CENTER + TALL + BOLD_ON + stripEmoji(order.couponCode) + BOLD_OFF + LF + NORMAL);
         lines.push(LEFT + line("-"));
       }
 
@@ -4427,6 +4478,23 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       return lines.join("");
     }
 
+    // ── QR → SVG (for HTML fallback path) ───────────────────
+    // The thermal ESC/POS path lets the printer's firmware raster the QR;
+    // the Windows-driver fallback goes through the browser's print pipeline,
+    // so we have to embed the QR as an image. qrcode-generator (loaded from
+    // jsdelivr in <head>) gives us an inline SVG string with zero external
+    // requests — critical because the print iframe may fire while offline.
+    function qrSVG(data, size) {
+      if (!data) return "";
+      if (typeof window.qrcode !== "function") return "";
+      try {
+        var q = window.qrcode(0, "M");
+        q.addData(String(data));
+        q.make();
+        return q.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+      } catch (_) { return ""; }
+    }
+
     // ── Browser fallback (Windows manual driver) ────────────
     // Same data as thermal path, laid out at ~80mm width. The Windows
     // thermal-printer driver handles the paper cut once "auto-cut after job"
@@ -4456,16 +4524,46 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var contactHTML = (C.showBranchPhones ? (C.contactLines || []).filter(Boolean).map(function(l){ return "<div>" + esc(l) + "</div>"; }).join("") : "");
       // 80mm receipt = 72mm printable. Page-break-after ensures the driver
       // treats each ticket as its own job, which triggers auto-cut.
+      // Reward / coupon QR — rendered as inline SVG so no network request
+      // is needed at print time. Prefer the opaque reward token over the
+      // coupon code (rewards are single-use, coupons may be reusable).
+      var qrPayload = "", qrLabel = "", qrHeading = "";
+      if (order.reward && order.reward.code) {
+        qrHeading = "REWARD CODE";
+        qrPayload = String(order.reward.code);
+        qrLabel   = order.reward.label ? String(order.reward.label) : "Scan to redeem";
+      } else if (order.couponCode) {
+        qrHeading = "COUPON";
+        qrPayload = String(order.couponCode);
+        qrLabel   = "Scan to apply";
+      }
+      var qrHTML = "";
+      if (qrPayload) {
+        var svg = qrSVG(qrPayload, 180);
+        qrHTML = "<div class='c b' style='margin-top:6px'>" + esc(qrHeading) + "</div>" +
+                 "<div class='c qrbox'>" + (svg || "") + "</div>" +
+                 "<div class='c b big'>" + esc(qrPayload) + "</div>" +
+                 "<div class='c sm'>" + esc(qrLabel) + "</div><hr/>";
+      }
+
+      // Receipt-style monospace matches the thermal printer's bitmap font.
+      // VT323 gives that unmistakable receipt look on-screen and in the
+      // Windows fallback print; Courier Prime / New / Consolas step in when
+      // the Google Fonts request fails (offline / firewalled).
       return "<!doctype html><html><head><meta charset='utf-8'/><title>Receipt #" + esc(order.orderNo) + "</title>" +
+        "<link rel='preconnect' href='https://fonts.googleapis.com'/>" +
+        "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin/>" +
+        "<link href='https://fonts.googleapis.com/css2?family=VT323&family=Courier+Prime:wght@400;700&display=swap' rel='stylesheet'/>" +
         "<style>" +
         "@page{size:72mm auto;margin:0}" +
-        "html,body{margin:0;padding:0;background:#fff;color:#000;font-family:'Courier New',monospace;font-size:12px;line-height:1.35;width:72mm}" +
+        "html,body{margin:0;padding:0;background:#fff;color:#000;font-family:'VT323','Courier Prime','Courier New','Consolas',monospace;font-size:15px;line-height:1.15;width:72mm;font-weight:700;-webkit-font-smoothing:none;font-smooth:never}" +
         ".r{padding:6mm 4mm}" +
-        ".c{text-align:center}.b{font-weight:900}.big{font-size:12px}.sm{font-size:11px}" +
+        ".c{text-align:center}.b{font-weight:900}.big{font-size:17px}.sm{font-size:13px}" +
         "hr{border:none;border-top:1px dashed #000;margin:5px 0}.dbl{border-top:2px solid #000}" +
         "table{width:100%;border-collapse:collapse}td{vertical-align:top;padding:2px 0}" +
-        ".n{width:70%}.p{width:30%;text-align:right;white-space:nowrap}.q{color:#333;font-size:10.5px;margin-top:1px}" +
+        ".n{width:70%}.p{width:30%;text-align:right;white-space:nowrap}.q{color:#000;font-size:13px;margin-top:1px}" +
         ".row{display:flex;justify-content:space-between}" +
+        ".qrbox{margin:4px auto;width:44mm}.qrbox svg{width:100%;height:auto;display:block}" +
         ".pagecut{page-break-after:always}" +
         "</style></head><body><div class='r'>" +
           "<div class='c b big'>" + esc((C.header || "").toUpperCase()) + "</div>" +
@@ -4495,6 +4593,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
             "<div class='row b big'><span>TOTAL</span><span>SR " + total.toFixed(2) + "</span></div>" +
             "<div class='c sm'>(Prices incl. 15% VAT: SR " + (order.vat || Math.round(total / 1.15 * 0.15 * 100) / 100).toFixed(2) + ")</div><hr class='dbl'/>" : "") +
           (order.note ? "<div><span class='b'>Note:</span> " + esc(order.note) + "</div><hr/>" : "") +
+          qrHTML +
           (C.showLoyalty ? "<div class='c b'>" + esc(C.loyaltyLabel || "Loyalty Points") + "</div><div class='c'>Earned this order: +" + pts + " pts</div>" +
             (C.showLoyaltyBalance && order.loyaltyBalance != null ? "<div class='c'>Total balance: " + Number(order.loyaltyBalance) + " pts</div>" : "") +
             "<hr/>" : "") +
