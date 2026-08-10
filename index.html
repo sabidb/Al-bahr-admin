@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.20.0";
+const APP_VERSION = "8.21.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -4268,6 +4268,40 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
           var s = await getDoc(doc(_db,"customers", ph));
           return s.exists() ? Object.assign({ id: ph, phone: ph }, s.data()) : null;
         }catch(e){ return null; } },
+        // Aggregate the customer's real loyalty state across every sibling
+        // customer doc that carries this phone. Anonymous re-installs mint a
+        // fresh customer doc per uid, so a single person can end up with
+        // several docs — each holding only what its uid earned. We sum the
+        // ledger-mirrored `points` (Phase 12) and legacy `loyaltyPoints`,
+        // and keep the highest tier snapshot we find so the receipt applies
+        // the right multiplier for THIS customer instead of the flat rule.
+        getLoyaltySnapshotByPhone: async function(ph){ try{
+          if(!ph) return null;
+          var docs = [];
+          try {
+            var qs = await getDocs(query(collection(_db,"customers"), where("phone","==", ph)));
+            qs.docs.forEach(function(d){ docs.push(d.data()); });
+          } catch(_) {}
+          if (!docs.length) {
+            try {
+              var s = await getDoc(doc(_db,"customers", ph));
+              if (s.exists()) docs.push(s.data());
+            } catch(_) {}
+          }
+          if (!docs.length) return null;
+          var balance = 0, bestMult = 0, tierName = "", tierEmoji = "";
+          docs.forEach(function(d){
+            var n = Number((d && (d.points != null ? d.points : d.loyaltyPoints)) || 0);
+            if (n > 0) balance += n;
+            var m = Number(d && d.tierMult) || 0;
+            if (m > bestMult) {
+              bestMult = m;
+              tierName  = (d.tierName || "") + "";
+              tierEmoji = (d.tierEmoji || "") + "";
+            }
+          });
+          return { balance: balance, tierMult: bestMult || 1, tierName: tierName, tierEmoji: tierEmoji };
+        }catch(e){ return null; } },
         // Look up an order by its 6-digit orderNo (100000+). Falls back to a
         // full scan if the indexed query fails — small collection, cheap.
         getOrderByNo: async function(no){ try{
@@ -4801,6 +4835,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       } else {
         pts = total >= 500 ? 35 : total >= 250 ? 20 : total >= 100 ? 10 : 5;
       }
+      // Apply the customer's tier multiplier so Bronze/Silver/Gold/VIP each
+      // earn the amount their tier actually grants — the flat rule above
+      // was printing the same +pts for every customer.
+      var tierMult = Number(order.loyaltyTierMult) > 0 ? Number(order.loyaltyTierMult) : 1;
+      pts = Math.round(pts * tierMult);
 
       var lines = [];
       // Order sub/discount are useful even when the manager hasn't opted into
@@ -4943,9 +4982,21 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       // Loyalty — earned this order + total running balance from the customer doc.
       if (C.showLoyalty) {
         lines.push(CENTER + w("Labels", stripEmoji(C.loyaltyLabel || "Loyalty Points")) + LF);
+        if (order.loyaltyTierName) {
+          lines.push(CENTER + "Tier: " + stripEmoji(order.loyaltyTierName) +
+            (tierMult && tierMult !== 1 ? " (x" + tierMult + ")" : "") + LF);
+        }
         lines.push(CENTER + "Earned this order: +" + pts + " pts" + LF);
         if (C.showLoyaltyBalance && order.loyaltyBalance != null) {
           lines.push(CENTER + "Total balance: " + Number(order.loyaltyBalance) + " pts" + LF);
+        }
+        // Per-customer QR — encodes the phone so the counter can scan the
+        // ticket to open the right customer, and so a future in-store kiosk
+        // can credit or redeem against the correct account. Prints on every
+        // receipt that has a phone, independently of the reward/coupon QR.
+        if (order.userPhone) {
+          lines.push(CENTER + escposQR("cust:" + String(order.userPhone), Math.max(1, QR_SIZE - 2), 50) + LF);
+          lines.push(CENTER + stripEmoji(order.userPhone) + LF);
         }
         lines.push(LEFT + line("-"));
       }
@@ -5014,7 +5065,17 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var prepMin = order.orderType === "delivery" ? Number(C.prepMinutesDelivery) || 30 : Number(C.prepMinutesPickup) || 15;
       var readyBy = new Date(d.getTime() + prepMin * 60000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
       var total = Number(order.total) || 0;
-      var pts = total >= 500 ? 35 : total >= 250 ? 20 : total >= 100 ? 10 : 5;
+      var basePts;
+      if (C.loyaltyPerRule && typeof C.loyaltyPerRule === "object") {
+        basePts = total >= 500 ? (C.loyaltyPerRule.over500 || 35)
+                : total >= 250 ? (C.loyaltyPerRule.over250 || 20)
+                : total >= 100 ? (C.loyaltyPerRule.over100 || 10)
+                : (C.loyaltyPerRule.base || 5);
+      } else {
+        basePts = total >= 500 ? 35 : total >= 250 ? 20 : total >= 100 ? 10 : 5;
+      }
+      var tierMult = Number(order.loyaltyTierMult) > 0 ? Number(order.loyaltyTierMult) : 1;
+      var pts = Math.round(basePts * tierMult);
       function esc(s){ return stripEmoji(String(s == null ? "" : s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
       // Same style engine as the ESC/POS path — CSS class picked from
@@ -5068,6 +5129,18 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
                  "<div class='c'>" + s("Reward", esc(qrPayload)) + "</div>" +
                  "<div class='c' style='font-size:" + Math.round(basePx*0.85) + "px'>" + esc(qrLabel) + "</div><hr/>";
       }
+      // Per-customer QR — always printed alongside the loyalty block when
+      // the order carries a phone, so the counter can scan the ticket to
+      // pull up the correct account.
+      var custQrHTML = "";
+      if (order.userPhone) {
+        var custSvg = qrSVG("cust:" + String(order.userPhone), 160);
+        if (custSvg) {
+          var custWidth = Math.max(20, qrWidthMm - 8);
+          custQrHTML = "<div class='c qrbox' style='width:" + custWidth + "mm'>" + custSvg + "</div>" +
+                       "<div class='c' style='font-size:" + Math.round(basePx*0.85) + "px'>" + esc(order.userPhone) + "</div>";
+        }
+      }
 
       // Receipt-style monospace matches the thermal printer's bitmap font.
       // VT323 gives the unmistakable receipt look; Courier Prime / New /
@@ -5116,8 +5189,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
             "<div class='c' style='font-size:" + Math.round(basePx*0.85) + "px'>(Prices incl. 15% VAT: SR " + (order.vat || Math.round(total / 1.15 * 0.15 * 100) / 100).toFixed(2) + ")</div><hr class='dbl'/>" : "") +
           (order.note ? "<div>" + s("Labels", "Note:") + " <span" + cls("ItemNote") + ">" + esc(order.note) + "</span></div><hr/>" : "") +
           qrHTML +
-          (C.showLoyalty ? "<div class='c'>" + s("Labels", esc(C.loyaltyLabel || "Loyalty Points")) + "</div><div class='c'>Earned this order: +" + pts + " pts</div>" +
+          (C.showLoyalty ? "<div class='c'>" + s("Labels", esc(C.loyaltyLabel || "Loyalty Points")) + "</div>" +
+            (order.loyaltyTierName ? "<div class='c'>Tier: " + esc(order.loyaltyTierName) + (tierMult && tierMult !== 1 ? " (x" + tierMult + ")" : "") + "</div>" : "") +
+            "<div class='c'>Earned this order: +" + pts + " pts</div>" +
             (C.showLoyaltyBalance && order.loyaltyBalance != null ? "<div class='c'>Total balance: " + Number(order.loyaltyBalance) + " pts</div>" : "") +
+            custQrHTML +
             "<hr/>" : "") +
           ((C.showTaxNumber && C.taxNumber) ? "<div class='row'>" + s("Labels", "Tax#") + "<span>" + esc(C.taxNumber) + "</span></div>" : "") +
           ((C.showVatNumber && C.vatNumber) ? "<div class='row'>" + s("Labels", "VAT#") + "<span>" + esc(C.vatNumber) + "</span></div>" : "") +
@@ -5161,11 +5237,24 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     // caches the branch snapshot's phone if the order didn't embed one.
     function enrichOrder(order) {
       var enriched = Object.assign({}, order);
-      if (!window.FB || !window.FB.getCustomerByPhone || !order.userPhone) {
-        return Promise.resolve(enriched);
+      if (!window.FB || !order.userPhone) return Promise.resolve(enriched);
+      var fn = window.FB.getLoyaltySnapshotByPhone;
+      if (typeof fn !== "function") {
+        // Legacy path — single doc, single field. Kept so an old cached
+        // fb.js still shows *something* rather than nothing.
+        if (!window.FB.getCustomerByPhone) return Promise.resolve(enriched);
+        return window.FB.getCustomerByPhone(order.userPhone).then(function (c) {
+          if (c && c.loyaltyPoints != null) enriched.loyaltyBalance = Number(c.loyaltyPoints) || 0;
+          return enriched;
+        }).catch(function () { return enriched; });
       }
-      return window.FB.getCustomerByPhone(order.userPhone).then(function (c) {
-        if (c && c.loyaltyPoints != null) enriched.loyaltyBalance = Number(c.loyaltyPoints) || 0;
+      return fn(order.userPhone).then(function (snap) {
+        if (snap) {
+          enriched.loyaltyBalance = Number(snap.balance) || 0;
+          enriched.loyaltyTierMult = Number(snap.tierMult) || 1;
+          if (snap.tierName)  enriched.loyaltyTierName  = snap.tierName;
+          if (snap.tierEmoji) enriched.loyaltyTierEmoji = snap.tierEmoji;
+        }
         return enriched;
       }).catch(function () { return enriched; });
     }
