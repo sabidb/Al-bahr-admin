@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.22.0";
+const APP_VERSION = "8.23.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -2213,7 +2213,8 @@ function CustomerOverview({ customer, allOrders, onBack, onReorder, onNewOrder, 
   const [tab, setTab] = React.useState("overview");
   const [notes, setNotes] = React.useState((customer && customer.notes) || []);
   const [noteDraft, setNoteDraft] = React.useState("");
-  const [audit, setAudit] = React.useState([]);
+  const [ledger, setLedger] = React.useState([]);
+  const [liveOrders, setLiveOrders] = React.useState(null);
   const [live, setLive] = React.useState(customer || {});
   const [busy, setBusy] = React.useState("");
   const [editing, setEditing] = React.useState(false);
@@ -2231,7 +2232,9 @@ function CustomerOverview({ customer, allOrders, onBack, onReorder, onNewOrder, 
   const isOwner = staff && (staff.role === "owner" || staff.role === "admin");
   const isManagerPlus = isOwner || (staff && staff.role === "manager");
 
-  // Refresh audit + notes when the customer changes.
+  // Real-time subscriptions — customer doc, ledger, and orders scoped to
+  // this phone. Every open device sees the same numbers the moment a
+  // Cloud Function commits a write.
   React.useEffect(() => {
     setLive(customer || {});
     setNotes((customer && customer.notes) || []);
@@ -2242,9 +2245,21 @@ function CustomerOverview({ customer, allOrders, onBack, onReorder, onNewOrder, 
       lang: (customer && customer.lang) || "ar",
       prefBranch: (customer && customer.prefBranch) || "",
     });
-    if (window.FB && window.FB.getCustomerPointsAudit && idKey) {
-      window.FB.getCustomerPointsAudit(idKey, 20).then(setAudit);
-    }
+    if (!idKey || !window.FB) return;
+    var unsubDoc = window.FB.onCustomerDoc
+      ? window.FB.onCustomerDoc(idKey, function(d){
+          if (!d) return;
+          setLive(d);
+          setNotes(Array.isArray(d.notes) ? d.notes : []);
+        })
+      : function(){};
+    var unsubLed = window.FB.onCustomerLedger
+      ? window.FB.onCustomerLedger(idKey, 40, setLedger)
+      : function(){};
+    var unsubOrd = (window.FB.onCustomerOrders && customer && customer.phone)
+      ? window.FB.onCustomerOrders(customer.phone, setLiveOrders)
+      : function(){};
+    return function(){ try{ unsubDoc(); }catch(_){ } try{ unsubLed(); }catch(_){ } try{ unsubOrd(); }catch(_){ } };
   }, [customer && customer.id, customer && customer.phone]);
 
   // Every order for this customer, drawn from the already-live orders
@@ -2252,14 +2267,18 @@ function CustomerOverview({ customer, allOrders, onBack, onReorder, onNewOrder, 
   const myOrders = React.useMemo(() => {
     const ph = customer && customer.phone;
     if (!ph) return [];
-    return (allOrders || [])
+    // Prefer the phone-scoped live stream when it's connected — it can see
+    // rules-restricted orders the global stream skips, and it updates the
+    // instant a fresh order lands at any branch.
+    const src = Array.isArray(liveOrders) ? liveOrders : (allOrders || []);
+    return src
       .filter(o => o.userPhone === ph)
       .sort((a, b) => {
         const at = (a.createdAt && a.createdAt.seconds) || (a.date ? Date.parse(a.date)/1000 : 0);
         const bt = (b.createdAt && b.createdAt.seconds) || (b.date ? Date.parse(b.date)/1000 : 0);
         return bt - at;
       });
-  }, [allOrders, customer && customer.phone]);
+  }, [allOrders, liveOrders, customer && customer.phone]);
 
   // Phase 4 stats — real numbers from real orders.
   const stats = React.useMemo(() => {
@@ -2368,12 +2387,13 @@ function CustomerOverview({ customer, allOrders, onBack, onReorder, onNewOrder, 
       if (o.refund && Number(o.refund.amount) > 0) rows.push({ t: t + 1, icon: "💸", label: "Refund SR " + Number(o.refund.amount).toFixed(2) });
     });
     (notes || []).forEach(n => rows.push({ t: Date.parse(n.at || "") || 0, icon: "📝", label: (n.staffName || "Staff") + ": " + n.text }));
-    (audit || []).forEach(a => {
+    (ledger || []).forEach(a => {
       const t = (a.at && a.at.seconds) ? a.at.seconds*1000 : (a.at ? Date.parse(a.at) : 0);
-      rows.push({ t: t, icon: a.delta >= 0 ? "➕" : "➖", label: "Loyalty " + (a.delta >= 0 ? "+" : "") + a.delta + " pts — " + (a.reason || "manual") + " (" + (a.staffName || "staff") + ")" });
+      const source = a.source ? " · " + a.source : "";
+      rows.push({ t: t, icon: a.delta >= 0 ? "➕" : "➖", label: "Loyalty " + (a.delta >= 0 ? "+" : "") + a.delta + " pts — " + (a.reason || "manual") + source });
     });
     return rows.filter(r => r.t).sort((a,b) => b.t - a.t).slice(0, 60);
-  }, [myOrders, notes, audit]);
+  }, [myOrders, notes, ledger]);
 
   // Filtered order rows for the History tab (Phase 7 + 8).
   const filteredOrders = React.useMemo(() => {
@@ -2405,10 +2425,10 @@ function CustomerOverview({ customer, allOrders, onBack, onReorder, onNewOrder, 
     const text = noteDraft.trim();
     if (!text) return;
     setBusy("note");
-    const res = await window.FB.addCustomerNote(idKey, text, staff);
+    const res = await window.FB.addCustomerNote(idKey, text);
     setBusy("");
     if (res && res.ok) {
-      setNotes(prev => prev.concat([res.entry]));
+      // onCustomerDoc will republish notes[] to every open device.
       setNoteDraft("");
     } else alert("Note failed: " + (res && res.error));
   };
@@ -2417,12 +2437,12 @@ function CustomerOverview({ customer, allOrders, onBack, onReorder, onNewOrder, 
     const reason = window.prompt(delta > 0 ? "Add " + delta + " pts — reason?" : "Deduct " + Math.abs(delta) + " pts — reason?", "");
     if (reason == null) return;
     setBusy("pts");
-    const res = await window.FB.adjustCustomerPoints(idKey, delta, reason, staff);
+    const res = await window.FB.adjustCustomerPoints(idKey, delta, reason);
     setBusy("");
     if (res && res.ok) {
+      // The live customer-doc + ledger subscriptions repaint balance and
+      // Timeline automatically as soon as the Cloud Function's writes land.
       setLive(prev => Object.assign({}, prev, { points: res.next, loyaltyPoints: res.next }));
-      const rows = await window.FB.getCustomerPointsAudit(idKey, 20);
-      setAudit(rows);
     } else alert("Adjust failed: " + (res && res.error));
   };
 
@@ -2639,15 +2659,18 @@ function CustomerOverview({ customer, allOrders, onBack, onReorder, onNewOrder, 
         actionBtn("#FEE2E2","#B91C1C","➖ Deduct 25 pts", () => adjustPoints(-25), !isManagerPlus),
         actionBtn("#F3F4F6","#374151","✏️ Custom", promptAdjust, !isManagerPlus)
       ),
-      sectionTitle("📜", "Points history"),
-      audit.length === 0
-        ? React.createElement("div", { className: "card", style: { padding: 20, textAlign: "center", color: "#9CA3AF" } }, "No manual adjustments yet")
-        : audit.map(a => React.createElement("div", { key: a.id, className: "card", style: { padding: 10, marginBottom: 6 } },
-            React.createElement("div", { style: { display: "flex", justifyContent: "space-between" } },
-              React.createElement("span", { style: { fontWeight: 800, color: a.delta >= 0 ? "#166534" : "#B91C1C" } }, (a.delta >= 0 ? "+" : "") + a.delta + " pts"),
-              React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, a.staffName || "staff")),
-            React.createElement("div", { style: { fontSize: 11, color: "#374151", marginTop: 2 } }, a.reason || "manual"),
-            React.createElement("div", { style: { fontSize: 10, color: "#9CA3AF", marginTop: 2 } }, a.previous + " → " + a.next)))
+      sectionTitle("📜", "Points ledger (live)"),
+      ledger.length === 0
+        ? React.createElement("div", { className: "card", style: { padding: 20, textAlign: "center", color: "#9CA3AF" } }, "No ledger entries yet")
+        : ledger.map(a => {
+            const t = (a.at && a.at.seconds) ? a.at.seconds*1000 : (a.at ? Date.parse(a.at) : 0);
+            return React.createElement("div", { key: a.id, className: "card", style: { padding: 10, marginBottom: 6 } },
+              React.createElement("div", { style: { display: "flex", justifyContent: "space-between" } },
+                React.createElement("span", { style: { fontWeight: 800, color: a.delta >= 0 ? "#166534" : "#B91C1C" } }, (a.delta >= 0 ? "+" : "") + a.delta + " pts"),
+                React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, a.source || "")),
+              React.createElement("div", { style: { fontSize: 11, color: "#374151", marginTop: 2 } }, a.reason || "manual"),
+              React.createElement("div", { style: { fontSize: 10, color: "#9CA3AF", marginTop: 2 } }, t ? new Date(t).toLocaleString("en-GB") : ""));
+          })
     );
   } else if (tab === "info") {
     const row = (label, key, type) => React.createElement("div", { key: key, style: { marginBottom: 10 } },
@@ -4776,63 +4799,64 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         saveTenant: async function(d){ try{ await setDoc(doc(_db,"settings","tenant"), Object.assign({}, d, { updatedAt: serverTimestamp() }), { merge: true }); return true; }catch(e){ window.__fbErr("tenant",e); return false; } },
         onTenantChange: function(cb){ return onSnapshot(doc(_db,"settings","tenant"), function(s){ cb(s.exists() ? s.data() : null); }); },
         saveCustomer: async function(d){ try{ await setDoc(doc(_db,"customers",d.phone),Object.assign({},d,{lastSeen:serverTimestamp()}),{merge:true}); }catch(e){} },
-        // Customer 360° panel — patch editable profile fields on the doc
-        // that CustomersTabNew opened (keyed by id when known, phone fallback).
-        updateCustomerInfo: async function(idOrPhone, patch){
+        // Customer 360° panel — mutations route through Cloud Functions
+        // callables so every device sees the same server-truth writes and
+        // rules stay tight (server-timestamped, audited, whitelisted).
+        updateCustomerInfo: async function(customerUid, patch){
           try {
-            var ref = doc(_db,"customers", idOrPhone);
-            await setDoc(ref, Object.assign({}, patch, { updatedAt: serverTimestamp() }), { merge: true });
-            return { ok: true };
-          } catch(e){ window.__fbErr("updateCustomerInfo", e); return { ok: false, error: (e && e.message) || String(e) }; }
+            var call = httpsCallable(_fns, "updateCustomerInfo");
+            var res = await call({ customerUid: customerUid, patch: patch });
+            return res && res.data && res.data.ok ? { ok: true } : { ok: false, error: "denied" };
+          } catch(e){ window.__fbErr("updateCustomerInfo", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
         },
-        // Append an internal staff note on customers/{id}.notes[]. Never
-        // surfaced in the customer app. Includes staff attribution + timestamp
-        // so a manager reviewing the panel later can see who wrote what.
-        addCustomerNote: async function(idOrPhone, note, staff){
+        addCustomerNote: async function(customerUid, text){
           try {
-            var entry = {
-              text: String(note || "").slice(0, 500),
-              staffUid: (staff && staff.uid) || "",
-              staffName: (staff && staff.name) || "",
-              at: new Date().toISOString()
-            };
-            var ref = doc(_db,"customers", idOrPhone);
-            await setDoc(ref, { notes: arrayUnion(entry) }, { merge: true });
-            return { ok: true, entry: entry };
-          } catch(e){ window.__fbErr("addCustomerNote", e); return { ok: false, error: (e && e.message) || String(e) }; }
+            var call = httpsCallable(_fns, "addCustomerNote");
+            var res = await call({ customerUid: customerUid, text: text });
+            return res && res.data && res.data.ok ? { ok: true, entry: res.data.entry } : { ok: false, error: "denied" };
+          } catch(e){ window.__fbErr("addCustomerNote", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
         },
-        // Manual loyalty adjustment — writes an audit doc under
-        // customers/{id}/pointsAudit and bumps points via increment. Server
-        // ledger callable is preferred for production balances (Phase 12),
-        // but that requires a callable that credits admin adjustments — this
-        // path is here so a cashier can nudge points from the panel today.
-        adjustCustomerPoints: async function(idOrPhone, delta, reason, staff){
+        // Points adjustment — owner-only server callable that writes the
+        // Phase-12 ledger and updates the mirrored balance atomically. Every
+        // other device sees the new balance the moment its onSnapshot fires.
+        adjustCustomerPoints: async function(customerUid, delta, reason){
           try {
-            var d = Math.round(Number(delta) || 0);
-            if (!d) return { ok: false, error: "zero-delta" };
-            var custRef = doc(_db,"customers", idOrPhone);
-            var snap = await getDoc(custRef);
-            var prev = snap.exists() ? (Number(snap.data().points) || Number(snap.data().loyaltyPoints) || 0) : 0;
-            var auditRef = doc(collection(_db,"customers", idOrPhone, "pointsAudit"));
-            await setDoc(auditRef, {
-              delta: d,
-              previous: prev,
-              next: prev + d,
-              reason: String(reason || "").slice(0, 200),
-              staffUid: (staff && staff.uid) || "",
-              staffName: (staff && staff.name) || "",
-              at: serverTimestamp()
-            });
-            await setDoc(custRef, { points: increment(d), loyaltyPoints: increment(d), updatedAt: serverTimestamp() }, { merge: true });
-            return { ok: true, previous: prev, next: prev + d };
-          } catch(e){ window.__fbErr("adjustCustomerPoints", e); return { ok: false, error: (e && e.message) || String(e) }; }
+            var call = httpsCallable(_fns, "adjustPoints");
+            var res = await call({ customerUid: customerUid, delta: Math.round(Number(delta)||0), reason: String(reason||""), allowNegative: true });
+            if (res && res.data && res.data.ok) return { ok: true, next: res.data.balance };
+            return { ok: false, error: "denied" };
+          } catch(e){ window.__fbErr("adjustCustomerPoints", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
         },
-        // Recent pointsAudit rows for the timeline / activity feed.
-        getCustomerPointsAudit: async function(idOrPhone, n){
+        // Live subscription to a single customer doc — the panel calls this
+        // on mount so name/points/notes/tier update in real time across
+        // every open device without polling.
+        onCustomerDoc: function(customerUid, cb){
           try {
-            var qs = await getDocs(query(collection(_db,"customers", idOrPhone, "pointsAudit"), orderBy("at","desc"), limit(Number(n)||20)));
-            return qs.docs.map(function(d){ return Object.assign({ id: d.id }, d.data()); });
-          } catch(e){ return []; }
+            return onSnapshot(doc(_db,"customers", customerUid), function(s){
+              cb(s.exists() ? Object.assign({ id: s.id }, s.data()) : null);
+            }, function(){ cb(null); });
+          } catch(e){ cb(null); return function(){}; }
+        },
+        // Live ledger subscription — Phase 12 pointsLedger is the source of
+        // truth for every earn/redeem/adjust. The panel merges these rows
+        // into the Timeline + Loyalty tabs so a redemption on the customer
+        // phone shows on the cashier screen the instant it lands.
+        onCustomerLedger: function(customerUid, n, cb){
+          try {
+            return onSnapshot(query(collection(_db,"pointsLedger"), where("customerUid","==", customerUid), orderBy("at","desc"), limit(Number(n)||20)), function(s){
+              cb(s.docs.map(function(d){ return Object.assign({ id: d.id }, d.data()); }));
+            }, function(){ cb([]); });
+          } catch(e){ cb([]); return function(){}; }
+        },
+        // Live orders stream scoped to one phone — replaces the tab's
+        // full-collection listener while the panel is open so a fresh order
+        // at another branch appears in this customer's history immediately.
+        onCustomerOrders: function(phone, cb){
+          try {
+            return onSnapshot(query(collection(_db,"orders"), where("userPhone","==", phone)), function(s){
+              cb(s.docs.map(function(d){ return Object.assign({ fbId: d.id }, d.data()); }));
+            }, function(){ cb([]); });
+          } catch(e){ cb([]); return function(){}; }
         },
         getAccounts: async function(){ try{ var s=await getDoc(doc(_db,"settings","accounts")); return s.exists()?s.data():null; }catch(e){ return null; } },
         saveAccounts: async function(a){ try{ await setDoc(doc(_db,"settings","accounts"),Object.assign({},a,{updatedAt:serverTimestamp()}),{merge:true}); return true; }catch(e){ window.__fbErr("accounts",e); return false; } },
