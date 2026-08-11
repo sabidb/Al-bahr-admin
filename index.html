@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.25.0";
+const APP_VERSION = "8.25.1";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -4395,17 +4395,11 @@ function App() {
     }
     // Phase 9: server-side updateOrderStatus dispatches the matching
     // notification (in-app inbox + FCM push if a token is registered).
-    // No inline admin dispatch needed here — that only risked drift and
-    // double-sends across retries.
-    if (order && order.userPhone && (next === "preparing" || next === "ready")) {
-      const ph = order.userPhone.startsWith("0") ? "966" + order.userPhone.slice(1) : order.userPhone;
-      const sep = String.fromCharCode(10);
-      const lines = ["Broast Albahr", "", "Hi " + order.userName + "!"];
-      if (next === "preparing") { lines.push("Your order #" + order.orderNo + " is being prepared!"); lines.push("Will be ready in ~15 minutes."); }
-      else { lines.push("Your order #" + order.orderNo + " is READY! 🎉"); lines.push(order.orderType === "pickup" ? "Please come pick it up!" : "Your order is on the way!"); }
-      lines.push("", "— Broast Albahr");
-      window.open("https://wa.me/" + ph + "?text=" + encodeURIComponent(lines.join(sep)), "_blank");
-    }
+    // No auto-WhatsApp redirect — the previous behaviour opened wa.me on
+    // every status change which the operator did not want. The customer
+    // still gets a push + in-app notification from the server-side
+    // dispatch above. The manual "💬 WhatsApp" buttons remain for
+    // one-off outreach.
   };
 
   // Auto-progression timers per order (keyed by orderNo).
@@ -4448,15 +4442,10 @@ function App() {
       // sendNotification needed here.
       try { await window.FB.updateOrderStatus(order.fbId, "cancelled", reason || ""); } catch(_) {}
     }
-    if (order.userPhone) {
-      const ph = order.userPhone.startsWith("0") ? "966" + order.userPhone.slice(1) : order.userPhone;
-      const sep = String.fromCharCode(10);
-      const lines = ["Broast Albahr", "", "Hi " + (order.userName||"Customer") + ",",
-        "We're sorry — order #" + order.orderNo + " could not be accepted right now."];
-      if (reason) lines.push("Reason: " + reason);
-      lines.push("", "Please contact us if you need help.");
-      window.open("https://wa.me/" + ph + "?text=" + encodeURIComponent(lines.join(sep)), "_blank");
-    }
+    // No auto-WhatsApp on decline — the cancel notification is delivered
+    // via the server-side push pipeline above. If the operator wants to
+    // WhatsApp the customer they can use the manual 💬 button in the
+    // customer profile.
   };
 
   const handleAssignDriver = async (order, name, phone) => {
@@ -6420,7 +6409,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         // print (offline, blocked, no printer), we log + show a status and
         // let the operator hit Reprint once the printer is back.
         console.warn("QZ exhausted after " + attempt + " attempts:", msg);
-        showStatus("❌ Print failed #" + order.orderNo + " — check QZ Tray", "error");
+        // Surface the actual error text in the badge — operator needs
+        // "Printer not found: PP9000EU" vs "websocket closed" to fix
+        // the root cause, not a generic "check QZ Tray".
+        var shortMsg = String(msg || "").slice(0, 140);
+        showStatus("❌ #" + order.orderNo + ": " + shortMsg, "error");
         logPrint({ ok: false, orderNo: order.orderNo, fbId: order.fbId, printer: printerFor(order), via: "qz", attempts: attempt, msg: msg });
         // Free the dedup slot so a manual Reprint can retry from scratch
         // once the printer/QZ Tray is back.
@@ -6490,7 +6483,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       statusEl.textContent = msg;
       statusEl.style.opacity = "1";
       clearTimeout(statusEl._timer);
-      statusEl._timer = setTimeout(function () { statusEl.style.opacity = "0"; }, 3000);
+      // Errors linger so the operator can actually read the QZ message —
+      // 12s is enough to snap a photo without being permanently intrusive.
+      var stickyMs = level === "error" ? 12000 : 3000;
+      statusEl._timer = setTimeout(function () { statusEl.style.opacity = "0"; }, stickyMs);
     }
 
     // ── Persistent printer status bar (disabled) ────────────
