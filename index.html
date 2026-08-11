@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.28.1";
+const APP_VERSION = "8.29.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -354,12 +354,13 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
   const [branchView, setBranchView] = React.useState(initialView);
   const [search, setSearch] = React.useState("");
   const [editingId, setEditingId] = React.useState(null);
-  const [editData, setEditData] = React.useState({ price: "", menuPrice: "", name: "", nameAr: "", emoji: "", branches: ["all"], img: "" });
+  const [editData, setEditData] = React.useState({ price: "", menuPrice: "", name: "", nameAr: "", emoji: "", branches: ["all"], img: "", description: "", descriptionAr: "" });
   const [uploadingImg, setUploadingImg] = React.useState(false);
   const [saved, setSaved] = React.useState(false);
   const [adding, setAdding] = React.useState(false);
   const [newItem, setNewItem] = React.useState({
     name: "", nameAr: "", price: "", menuPrice: "", emoji: "🍗", category: "🍗 Broast", cal: "", prepMinutes: 8,
+    description: "", descriptionAr: "",
     branches: isOwner ? ["all"] : [branchScope],
   });
 
@@ -443,9 +444,13 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
           // Empty string clears the photo (customer app falls back to the
           // category icon); a URL persists it.
           img: (editData.img != null ? editData.img : (i.img || "")) || undefined,
+          description: (editData.description || "").trim() || undefined,
+          descriptionAr: (editData.descriptionAr || "").trim() || undefined,
         });
         // Firestore rejects `undefined` fields — strip the key if menuPrice cleared.
         if (patch.menuPrice == null) delete patch.menuPrice;
+        if (patch.description == null) delete patch.description;
+        if (patch.descriptionAr == null) delete patch.descriptionAr;
         // Only the owner can change which branches an item belongs to.
         if (isOwner && Array.isArray(editData.branches) && editData.branches.length) patch.branches = editData.branches;
         return patch;
@@ -490,10 +495,14 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
       available: true,
     };
     if (menuPrice != null) rec.menuPrice = menuPrice;
+    const descEn = (newItem.description || "").trim();
+    const descAr = (newItem.descriptionAr || "").trim();
+    if (descEn) rec.description = descEn;
+    if (descAr) rec.descriptionAr = descAr;
     u[newItem.category] = [...u[newItem.category], rec];
     persist(u);
     setAdding(false);
-    setNewItem({ name: "", nameAr: "", price: "", menuPrice: "", emoji: "🍗", category: categories[0] || "🍗 Broast", cal: "", prepMinutes: 8, branches: isOwner ? ["all"] : [branchScope] });
+    setNewItem({ name: "", nameAr: "", price: "", menuPrice: "", emoji: "🍗", category: categories[0] || "🍗 Broast", cal: "", prepMinutes: 8, description: "", descriptionAr: "", branches: isOwner ? ["all"] : [branchScope] });
     setSaved(true); setTimeout(() => setSaved(false), 2000);
   };
 
@@ -561,6 +570,8 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
         ),
         React.createElement("input", { className: "inp", placeholder: "Calories e.g. 450 kcal (optional)", value: newItem.cal, onChange: e => setNewItem(p => ({...p, cal: e.target.value})) }),
         React.createElement("input", { className: "inp", type: "number", min: 1, placeholder: "Prep time (min)", value: newItem.prepMinutes, onChange: e => setNewItem(p => ({...p, prepMinutes: e.target.value})) }),
+        React.createElement("textarea", { className: "inp", style: { gridColumn: "span 2", minHeight: 60, resize: "vertical", fontFamily: "inherit" }, placeholder: "Description EN — e.g. Triple-decker — served with fries & coleslaw", value: newItem.description, onChange: e => setNewItem(p => ({...p, description: e.target.value})) }),
+        React.createElement("textarea", { className: "inp", style: { gridColumn: "span 2", minHeight: 60, resize: "vertical", fontFamily: "inherit", direction: "rtl" }, placeholder: "الوصف بالعربية — مثال: ساندويتش ثلاثي مع بطاطس وسلطة كول سلو", value: newItem.descriptionAr, onChange: e => setNewItem(p => ({...p, descriptionAr: e.target.value})) }),
         branchesChecklist(newItem.branches, (bs) => setNewItem(p => ({...p, branches: bs})))
       ),
       React.createElement("button", { onClick: addItem, className: "btn-green", style: { width: "100%", padding: "13px", fontSize: 14, marginTop: 12 } }, "✅ Add to Menu")
@@ -592,6 +603,8 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
                       React.createElement("input", { className: "inp", type: "number", value: editData.price, onChange: e => setEditData(p => ({...p, price: e.target.value})), placeholder: "App Price SR" }),
                       React.createElement("input", { className: "inp", type: "number", value: editData.menuPrice, onChange: e => setEditData(p => ({...p, menuPrice: e.target.value})), placeholder: "Menu Price SR (opt.)", title: "Standard counter price. Leave blank to match the app price." }),
                       React.createElement("input", { className: "inp", value: editData.emoji, onChange: e => setEditData(p => ({...p, emoji: e.target.value})), placeholder: "Emoji" }),
+                      React.createElement("textarea", { className: "inp", style: { gridColumn: "span 2", minHeight: 60, resize: "vertical", fontFamily: "inherit" }, value: editData.description, onChange: e => setEditData(p => ({...p, description: e.target.value})), placeholder: "Description EN — shows on product detail" }),
+                      React.createElement("textarea", { className: "inp", style: { gridColumn: "span 2", minHeight: 60, resize: "vertical", fontFamily: "inherit", direction: "rtl" }, value: editData.descriptionAr, onChange: e => setEditData(p => ({...p, descriptionAr: e.target.value})), placeholder: "الوصف بالعربية" }),
                       branchesChecklist(editData.branches, (bs) => setEditData(p => ({...p, branches: bs})))
                     ),
                     // Product photo — preview + upload/clear. Empty string
@@ -649,7 +662,7 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
                           : null
                       ),
                       React.createElement("div", { className: "m-actions", style: { display: "flex", gap: 6, flexShrink: 0 } },
-                        isOwner && React.createElement("button", { onClick: () => { setEditingId(item.id); setEditData({ price: String(item.price), menuPrice: item.menuPrice ? String(item.menuPrice) : "", name: item.name, nameAr: item.nameAr || "", emoji: item.emoji || "", branches: itemBranches(item).slice(), img: item.img || "" }); }, style: { background: "#F4F5F9", border: "none", color: "#6B7280", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13 } }, "✏️"),
+                        isOwner && React.createElement("button", { onClick: () => { setEditingId(item.id); setEditData({ price: String(item.price), menuPrice: item.menuPrice ? String(item.menuPrice) : "", name: item.name, nameAr: item.nameAr || "", emoji: item.emoji || "", branches: itemBranches(item).slice(), img: item.img || "", description: item.description || "", descriptionAr: item.descriptionAr || "" }); }, style: { background: "#F4F5F9", border: "none", color: "#6B7280", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13 } }, "✏️"),
                         React.createElement("button", { onClick: () => toggleAvail(item.id), title: availHere ? "Turn OFF for " + (branchView === "all" ? "all branches" : branchName(isOwner ? branchView : branchScope)) : "Turn ON", style: { background: availHere ? "#ECFDF5" : "#FFF1F2", border: "none", color: availHere ? "#059669" : "#E60000", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 700 } }, availHere ? "✅" : "❌"),
                         isOwner && React.createElement("button", { onClick: () => deleteItem(item.id), style: { background: "#FFF1F2", border: "none", color: "#E60000", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13 } }, "🗑️")
                       )
