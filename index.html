@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.27.0";
+const APP_VERSION = "8.28.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -3696,6 +3696,16 @@ function CustomersTabNew({ customers, orders, staff, onReorder, onNewOrder }) {
 
 // ── ANALYTICS TAB ──
 function AnalyticsTabNew({ orders }) {
+  // Phase 18 — campaign ROI + customer funnel. Live subscription to
+  // settings/campaigns so the numbers repaint on every issuance or
+  // redemption without a tab refresh.
+  const [campaigns, setCampaigns] = React.useState([]);
+  React.useEffect(() => {
+    if (!window.FB || !window.FB.onCampaignsChange) return;
+    const u = window.FB.onCampaignsChange(setCampaigns);
+    return () => { try { u(); } catch (_){} };
+  }, []);
+
   const today = new Date();
 
   // Build last 30 days data
@@ -3764,6 +3774,36 @@ function AnalyticsTabNew({ orders }) {
   const branches = {};
   orders.forEach(o => { branches[o.branch || "unknown"] = (branches[o.branch || "unknown"] || 0) + 1; });
 
+  // ── Customer funnel (Phase 18) ────────────────────────────
+  // Downloads → registration → first order → repeat isn't fully
+  // measurable client-side (needs install-analytics), so we surface the
+  // slice we CAN see: customers who ordered, split into new-this-week
+  // vs repeat. Derived from the orders list already in memory — cheap.
+  const phoneFirstOrderDay = {};
+  const phoneOrderCount = {};
+  orders.forEach(o => {
+    const ph = o.userPhone || "?";
+    phoneOrderCount[ph] = (phoneOrderCount[ph] || 0) + 1;
+    const d = (o.date || o.createdAt || "").slice(0, 10);
+    if (!phoneFirstOrderDay[ph] || d < phoneFirstOrderDay[ph]) phoneFirstOrderDay[ph] = d;
+  });
+  const totalCustomers = Object.keys(phoneOrderCount).length;
+  const weekAgoStr = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const newThisWeek = Object.values(phoneFirstOrderDay).filter(d => d >= weekAgoStr).length;
+  const repeatCustomers = Object.values(phoneOrderCount).filter(n => n >= 2).length;
+  const repeatRate = totalCustomers > 0 ? Math.round((repeatCustomers / totalCustomers) * 100) : 0;
+
+  // ── Campaign ROI ──────────────────────────────────────────
+  // Sum issued/redeemed across every campaign; per-campaign detail below.
+  const campStats = (campaigns || []).reduce((acc, c) => {
+    const st = c.stats || {};
+    acc.issued   += Number(st.issued || 0);
+    acc.redeemed += Number(st.redeemed || 0);
+    acc.revenue  += Number(st.revenueSr || 0);
+    return acc;
+  }, { issued: 0, redeemed: 0, revenue: 0 });
+  const redemptionRate = campStats.issued > 0 ? Math.round((campStats.redeemed / campStats.issued) * 100) : 0;
+
   return React.createElement("div", null,
     // Stats grid
     React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 } },
@@ -3774,6 +3814,57 @@ function AnalyticsTabNew({ orders }) {
       React.createElement(StatCard, { icon: "🧾", label: "Total Orders", value: totalOrders, color: "#E60000" }),
       React.createElement(StatCard, { icon: "💵", label: "Net Sales", value: "SR " + totalSaleAll.toFixed(0), color: "#059669" }),
       React.createElement(StatCard, { icon: "📈", label: "Total Revenue", value: "SR " + totalRevenue.toFixed(0), color: "#7C3AED" })
+    ),
+
+    // ── Customer funnel card (Phase 18) ────────────────────
+    React.createElement("div", { className: "card", style: { padding: 16, marginBottom: 14, background: "linear-gradient(135deg,#EFF6FF 0%,#FFF 100%)" } },
+      React.createElement("div", { style: { fontWeight: 800, fontSize: 14, color: "#1E40AF", marginBottom: 12 } }, "👥 Customer funnel"),
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 } },
+        React.createElement("div", null,
+          React.createElement("div", { style: { fontSize: 10, color: "#6B7280", fontWeight: 700, letterSpacing: 0.4 } }, "CUSTOMERS"),
+          React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: "#111827" } }, totalCustomers)
+        ),
+        React.createElement("div", null,
+          React.createElement("div", { style: { fontSize: 10, color: "#6B7280", fontWeight: 700, letterSpacing: 0.4 } }, "NEW (7D)"),
+          React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: "#059669" } }, newThisWeek)
+        ),
+        React.createElement("div", null,
+          React.createElement("div", { style: { fontSize: 10, color: "#6B7280", fontWeight: 700, letterSpacing: 0.4 } }, "REPEAT"),
+          React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: "#2563EB" } }, repeatCustomers)
+        ),
+        React.createElement("div", null,
+          React.createElement("div", { style: { fontSize: 10, color: "#6B7280", fontWeight: 700, letterSpacing: 0.4 } }, "REPEAT RATE"),
+          React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: "#7C3AED" } }, repeatRate + "%")
+        )
+      )
+    ),
+
+    // ── Campaign ROI card ─────────────────────────────────
+    (campaigns.length > 0) && React.createElement("div", { className: "card", style: { padding: 16, marginBottom: 14, background: "linear-gradient(135deg,#FFF1F2 0%,#FFF 100%)" } },
+      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
+        React.createElement("div", { style: { fontWeight: 800, fontSize: 14, color: "#B91C1C" } }, "📣 Campaign performance"),
+        React.createElement("span", { style: { fontSize: 11, color: "#6B7280", fontWeight: 700 } }, campaigns.length + " campaigns")
+      ),
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 10 } },
+        React.createElement("div", null,
+          React.createElement("div", { style: { fontSize: 10, color: "#6B7280", fontWeight: 700, letterSpacing: 0.4 } }, "ISSUED"),
+          React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: "#111827" } }, campStats.issued)
+        ),
+        React.createElement("div", null,
+          React.createElement("div", { style: { fontSize: 10, color: "#6B7280", fontWeight: 700, letterSpacing: 0.4 } }, "REDEEMED"),
+          React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: "#059669" } }, campStats.redeemed)
+        ),
+        React.createElement("div", null,
+          React.createElement("div", { style: { fontSize: 10, color: "#6B7280", fontWeight: 700, letterSpacing: 0.4 } }, "REDEMPTION"),
+          React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: "#7C3AED" } }, redemptionRate + "%")
+        )
+      ),
+      React.createElement("div", { style: { borderTop: "1px solid #FDE68A", paddingTop: 10, marginTop: 4 } },
+        campaigns.slice(0, 5).map(c => React.createElement("div", { key: c.id, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", fontSize: 12 } },
+          React.createElement("span", { style: { color: "#111827", fontWeight: 600 } }, c.name || "(unnamed)"),
+          React.createElement("span", { style: { color: "#6B7280" } }, (c.stats?.issued || 0) + " issued · " + (c.stats?.redeemed || 0) + " redeemed")
+        ))
+      )
     ),
 
     // Export Data button
