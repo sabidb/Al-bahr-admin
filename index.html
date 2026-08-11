@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.29.0";
+const APP_VERSION = "8.29.1";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -5009,10 +5009,20 @@ function App() {
     return () => { cancelled = true; if(unsubOrders)unsubOrders(); if(unsubMenu)unsubMenu(); if(unsubCustomers)unsubCustomers(); };
   }, [loggedIn, selectedBranch, refreshKey]);
 
-  const handleStatusChange = async (orderNo, next) => {
+  const handleStatusChange = async (orderNo, next, fbIdHint) => {
     setOrders(p => p.map(o => o.orderNo === orderNo ? {...o, status: next} : o));
-    const order = orders.find(o => o.orderNo === orderNo);
-    if (order && order.fbId && window.FB) await window.FB.updateOrderStatus(order.fbId, next);
+    // Prefer the fbId the caller already knows about — auto-accept and the
+    // auto-progression timers fire for orders that may not yet be in the
+    // `orders` closure snapshot, so a `orders.find()` here returns undefined
+    // and the Firestore write is silently skipped (the local flip then gets
+    // reverted by the next snapshot, which is exactly the "still need to
+    // press Accept manually" symptom).
+    let fbId = fbIdHint;
+    if (!fbId) {
+      const found = orders.find(o => o.orderNo === orderNo);
+      fbId = found && found.fbId;
+    }
+    if (fbId && window.FB) await window.FB.updateOrderStatus(fbId, next);
     // Clear auto-progression timers if manually overridden to ready/done/cancelled
     if (["ready", "done", "completed", "cancelled", "refunded"].includes(next) && autoTimersRef.current[orderNo]) {
       autoTimersRef.current[orderNo].forEach(clearTimeout);
@@ -5037,7 +5047,10 @@ function App() {
       try { window.ThermalPrint.markPrinted(order); } catch(_) {}
       try { await window.ThermalPrint.print(order); } catch(_) {}
     }
-    await handleStatusChange(order.orderNo, "preparing");
+    // Pass the fbId directly — auto-accept fires from the same snapshot
+    // callback that just introduced the order, so it isn't in the `orders`
+    // React state closure yet.
+    await handleStatusChange(order.orderNo, "preparing", order.fbId);
 
     // Clear any existing timers for this order
     if (autoTimersRef.current[order.orderNo]) {
@@ -5046,13 +5059,13 @@ function App() {
 
     const timers = [
       setTimeout(async () => {
-        await handleStatusChange(order.orderNo, "cooking");
+        await handleStatusChange(order.orderNo, "cooking", order.fbId);
       }, 5 * 60 * 1000),
       setTimeout(async () => {
-        await handleStatusChange(order.orderNo, "almost_ready");
+        await handleStatusChange(order.orderNo, "almost_ready", order.fbId);
       }, 10 * 60 * 1000),
       setTimeout(async () => {
-        await handleStatusChange(order.orderNo, "ready");
+        await handleStatusChange(order.orderNo, "ready", order.fbId);
       }, 15 * 60 * 1000),
     ];
     autoTimersRef.current[order.orderNo] = timers;
