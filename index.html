@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.29.1";
+const APP_VERSION = "8.30.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -230,7 +230,11 @@ function OrderCard({ order, onStatusChange, onAccept, onDecline, onAssignDriver,
       // Meta
       React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" } },
         order.branch && React.createElement("span", { className: "tag", style: { background: "#F4F5F9", color: "#6B7280" } },
-          "🏪 " + (order.branch === "kakkiyah" ? "Kakkiyah" : order.branch === "subhani" ? "Subhani" : "Waliy Al Ahd")
+          "🏪 " + (function(id){
+            var list = (window.__branchList || []);
+            var b = list.find && list.find(function(x){ return x && x.id === id; });
+            return (b && (b.name || b.nameEn)) || String(id).charAt(0).toUpperCase() + String(id).slice(1);
+          })(order.branch)
         ),
         React.createElement("span", { className: "tag", style: { background: "#F4F5F9", color: "#6B7280" } }, "💳 " + (order.paymentMethod || "cash")),
         order.locationLink && React.createElement("a", { href: order.locationLink, target: "_blank", className: "tag tag-green", style: { textDecoration: "none" } }, "📍 Map"),
@@ -2603,11 +2607,14 @@ function StaffPanel({ isOwner, branches, doLogout, authEmail }) {
   const [loading, setLoading] = React.useState(false);
   const [adding, setAdding] = React.useState(false);
   const [newEmail, setNewEmail] = React.useState("");
+  const [newUsername, setNewUsername] = React.useState("");
   const [newPw, setNewPw] = React.useState("");
   const [newBranch, setNewBranch] = React.useState((branches[0] && branches[0].id) || "");
   const [msg, setMsg] = React.useState("");
   const [err, setErr] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [resetUid, setResetUid] = React.useState(null);
+  const [resetPwNew, setResetPwNew] = React.useState("");
 
   const load = async () => {
     if (!isOwner || !window.FB || !window.FB.listStaff) return;
@@ -2621,23 +2628,36 @@ function StaffPanel({ isOwner, branches, doLogout, authEmail }) {
   const addStaff = async () => {
     setMsg(""); setErr("");
     const email = newEmail.trim();
-    if (!email || newPw.length < 6) { setErr("Enter an email and a password of at least 6 characters."); return; }
+    const username = newUsername.trim();
+    if (!email) { setErr("Enter an email."); return; }
+    if (newPw.length < 8) { setErr("Password must be at least 8 characters."); return; }
+    if (username && !/^[a-zA-Z0-9_.-]{2,32}$/.test(username)) { setErr("Username: 2–32 chars of letters, digits, . _ -"); return; }
     if (!newBranch) { setErr("Pick a branch."); return; }
-    if (!window.Auth || !window.Auth.createStaff) { setErr("Auth service not ready."); return; }
+    // Prefer the server-side callable (owner-verified, atomic claims + audit).
+    // Fall back to the older client helper only if the callable isn't deployed yet.
+    if (!window.Auth || !(window.Auth.createBranchUser || window.Auth.createStaff)) { setErr("Auth service not ready."); return; }
     setBusy(true);
-    const res = await window.Auth.createStaff(email, newPw, { role: "branch", branchId: newBranch });
+    let res;
+    if (window.Auth.createBranchUser) {
+      res = await window.Auth.createBranchUser({ email: email, password: newPw, username: username || undefined, branchId: newBranch, role: "branch" });
+    } else {
+      res = await window.Auth.createStaff(email, newPw, { role: "branch", branchId: newBranch, username: username || null });
+    }
     setBusy(false);
     if (!res.ok) {
-      setErr(res.error === "auth/email-already-in-use" ? "That email is already used." :
-             res.error === "auth/weak-password" ? "Password is too weak (min 6 chars)." :
-             res.error === "auth/invalid-email" ? "Invalid email format." :
-             "Could not create user: " + res.error);
+      var raw = res.error || "";
+      setErr(raw === "auth/email-already-in-use" || raw === "already-exists" ? "That email is already used." :
+             raw === "auth/weak-password" ? "Password too weak (min 8 chars)." :
+             raw === "auth/invalid-email" ? "Invalid email format." :
+             raw === "permission-denied" ? "Owner only." :
+             raw === "not-found" ? "That branch does not exist." :
+             "Could not create user: " + raw);
       return;
     }
-    setMsg("✅ Added " + email + " as " + branchName(newBranch) + " manager.");
-    setNewEmail(""); setNewPw(""); setAdding(false);
+    setMsg("✅ Added " + email + (username ? " (" + username + ")" : "") + " as " + branchName(newBranch) + " manager. Share the password with them directly.");
+    setNewEmail(""); setNewUsername(""); setNewPw(""); setAdding(false);
     load();
-    setTimeout(() => setMsg(""), 4000);
+    setTimeout(() => setMsg(""), 6000);
   };
 
   const resetPw = async (email) => {
@@ -2646,11 +2666,40 @@ function StaffPanel({ isOwner, branches, doLogout, authEmail }) {
     catch(e) { setErr("Could not send reset email: " + ((e && e.message) || "error")); }
   };
 
+  const setDirectPw = async (u) => {
+    setMsg(""); setErr("");
+    if (!window.Auth || !window.Auth.resetBranchUserPassword) {
+      setErr("Direct password reset needs the server callable — falling back to email reset.");
+      return resetPw(u.email);
+    }
+    if (resetPwNew.length < 8) { setErr("New password must be at least 8 characters."); return; }
+    const res = await window.Auth.resetBranchUserPassword({ targetUid: u.uid, newPassword: resetPwNew });
+    if (!res.ok) { setErr("Could not reset password: " + (res.error || "error")); return; }
+    setMsg("🔑 Password reset for " + (u.email || u.uid) + ". Share the new password with them directly.");
+    setResetUid(null); setResetPwNew("");
+    setTimeout(() => setMsg(""), 6000);
+  };
+
   const removeStaff = async (u) => {
-    if (u.role === "owner") { alert("Cannot remove the owner from here. Delete the owner user in the Firebase Console if needed."); return; }
-    if (!confirm("Remove " + (u.email || u.uid) + " from staff? They will lose access on next request.\n\nNote: this removes their role profile but NOT their Firebase Auth account. Delete the Auth account in Firebase Console for full removal.")) return;
-    const ok = await window.FB.deleteStaff(u.uid);
-    if (ok) { setMsg("Removed."); load(); setTimeout(() => setMsg(""), 3000); }
+    if (u.role === "owner") { alert("Refusing to remove an owner from here. Promote another user to owner first."); return; }
+    if (!confirm("Remove " + (u.email || u.uid) + "? Their Firebase account will be deleted and any active session cut on next refresh.")) return;
+    if (window.Auth && window.Auth.deleteBranchUser) {
+      const res = await window.Auth.deleteBranchUser({ targetUid: u.uid });
+      if (!res.ok) { setErr("Could not remove: " + (res.error || "error")); return; }
+    } else if (window.FB && window.FB.deleteStaff) {
+      const ok = await window.FB.deleteStaff(u.uid);
+      if (!ok) { setErr("Could not remove."); return; }
+    } else { setErr("Delete service not ready."); return; }
+    setMsg("Removed."); load(); setTimeout(() => setMsg(""), 3000);
+  };
+
+  const toggleDisabled = async (u) => {
+    if (!window.Auth || !window.Auth.setBranchUserStatus) { setErr("Disable service not ready."); return; }
+    const disable = u.status !== "disabled";
+    if (!confirm((disable ? "Disable " : "Re-enable ") + (u.email || u.uid) + "?")) return;
+    const res = await window.Auth.setBranchUserStatus({ targetUid: u.uid, disabled: disable });
+    if (!res.ok) { setErr("Could not update: " + (res.error || "error")); return; }
+    setMsg(disable ? "Disabled." : "Re-enabled."); load(); setTimeout(() => setMsg(""), 3000);
   };
 
   if (!isOwner) {
@@ -2672,11 +2721,14 @@ function StaffPanel({ isOwner, branches, doLogout, authEmail }) {
     adding && React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 14, border: "1.5px dashed #BBF7D0", background: "#F8FEF9" } },
       React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#059669", marginBottom: 10 } }, "New Branch Manager"),
       React.createElement("div", { style: { marginBottom: 10 } },
-        React.createElement("label", { style: { fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6 } }, "EMAIL"),
-        React.createElement("input", { className: "inp", type: "email", value: newEmail, onChange: e => setNewEmail(e.target.value), placeholder: "manager@example.com" })),
+        React.createElement("label", { style: { fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6 } }, "EMAIL (used to sign in)"),
+        React.createElement("input", { className: "inp", type: "email", value: newEmail, onChange: e => setNewEmail(e.target.value), placeholder: "manager@example.com", autoComplete: "off" })),
+      React.createElement("div", { style: { marginBottom: 10 } },
+        React.createElement("label", { style: { fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6 } }, "USERNAME (display name, optional)"),
+        React.createElement("input", { className: "inp", type: "text", value: newUsername, onChange: e => setNewUsername(e.target.value), placeholder: "e.g. kakkiyah_mgr", autoComplete: "off" })),
       React.createElement("div", { style: { marginBottom: 10 } },
         React.createElement("label", { style: { fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6 } }, "STARTING PASSWORD"),
-        React.createElement("input", { className: "inp", type: "text", value: newPw, onChange: e => setNewPw(e.target.value), placeholder: "min 6 characters" })),
+        React.createElement("input", { className: "inp", type: "text", value: newPw, onChange: e => setNewPw(e.target.value), placeholder: "min 8 characters — share with the manager directly", autoComplete: "new-password" })),
       React.createElement("div", { style: { marginBottom: 12 } },
         React.createElement("label", { style: { fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6 } }, "BRANCH"),
         React.createElement("select", { className: "inp", value: newBranch, onChange: e => setNewBranch(e.target.value) },
@@ -2691,20 +2743,30 @@ function StaffPanel({ isOwner, branches, doLogout, authEmail }) {
       : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 } },
           staff.length === 0
             ? React.createElement("div", { style: { color: "#9CA3AF", fontSize: 12.5, padding: 10 } }, "No staff yet. Add the first branch manager above.")
-            : staff.map(u => React.createElement("div", { key: u.uid, className: "card", style: { padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 } },
-                React.createElement("div", { style: { flex: 1, minWidth: 0 } },
-                  React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#1A1D27", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, u.role === "owner" ? "👑 " : "🏪 ", u.email || u.uid),
-                  React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginTop: 2 } },
-                    u.role === "owner" ? "Owner · Full access" : (branchName(u.branchId) + " manager"))
+            : staff.map(u => React.createElement("div", { key: u.uid, className: "card", style: { padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 } },
+                React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 } },
+                  React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                    React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#1A1D27", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+                      u.role === "owner" ? "👑 " : "🏪 ", u.username ? u.username + " · " : "", u.email || u.uid,
+                      u.status === "disabled" && React.createElement("span", { style: { marginLeft: 6, fontSize: 10, color: "#DC2626", background: "#FEF2F2", padding: "2px 6px", borderRadius: 6 } }, "DISABLED")),
+                    React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginTop: 2 } },
+                      u.role === "owner" ? "Owner · Full access" : (branchName(u.branchId) + " manager"))
+                  ),
+                  React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" } },
+                    u.role !== "owner" && React.createElement("button", { onClick: () => { setResetUid(resetUid === u.uid ? null : u.uid); setResetPwNew(""); }, title: "Set a new password directly", style: { background: "#EFF6FF", border: "none", color: "#2563EB", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700 } }, "🔑 New PW"),
+                    React.createElement("button", { onClick: () => resetPw(u.email), disabled: !u.email, title: "Send password reset email", style: { background: "#F0FDF4", border: "none", color: "#059669", padding: "6px 9px", borderRadius: 8, cursor: u.email ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 700, opacity: u.email ? 1 : 0.5 } }, "📧"),
+                    u.role !== "owner" && React.createElement("button", { onClick: () => toggleDisabled(u), title: u.status === "disabled" ? "Re-enable" : "Disable", style: { background: "#FFF7ED", border: "none", color: "#EA580C", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700 } }, u.status === "disabled" ? "▶️" : "⏸️"),
+                    u.role !== "owner" && React.createElement("button", { onClick: () => removeStaff(u), title: "Delete user", style: { background: "#FFF1F2", border: "none", color: "#E60000", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700 } }, "🗑️")
+                  )
                 ),
-                React.createElement("div", { style: { display: "flex", gap: 6 } },
-                  React.createElement("button", { onClick: () => resetPw(u.email), disabled: !u.email, title: "Send password reset email", style: { background: "#EFF6FF", border: "none", color: "#2563EB", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700 } }, "🔑"),
-                  u.role !== "owner" && React.createElement("button", { onClick: () => removeStaff(u), title: "Remove role", style: { background: "#FFF1F2", border: "none", color: "#E60000", padding: "6px 9px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700 } }, "🗑️")
+                resetUid === u.uid && React.createElement("div", { style: { display: "flex", gap: 8, padding: "8px 0 2px" } },
+                  React.createElement("input", { className: "inp", type: "text", value: resetPwNew, onChange: e => setResetPwNew(e.target.value), placeholder: "new password (min 8 chars)", style: { flex: 1 }, autoComplete: "new-password" }),
+                  React.createElement("button", { onClick: () => setDirectPw(u), className: "btn-primary", style: { padding: "8px 12px", fontSize: 12 } }, "Set")
                 )
               ))),
 
     React.createElement("div", { style: { fontSize: 10.5, color: "#9CA3AF", lineHeight: 1.5, marginBottom: 12 } },
-      "🔑 = send password-reset email · 🗑️ = remove role. Removing a role revokes access; to fully delete the account, also remove them from Firebase Console → Auth → Users."),
+      "🔑 New PW = set a new password you give the manager directly · 📧 = email a reset link · ⏸️/▶️ = disable/re-enable · 🗑️ = delete Firebase account. Every action is audit-logged."),
 
     React.createElement("button", { onClick: doLogout, className: "btn-secondary", style: { width: "100%", padding: "12px", fontSize: 13 } }, "🚪 Sign Out")
   );
@@ -4005,7 +4067,11 @@ function AnalyticsTabNew({ orders }) {
       React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#FFC400", marginBottom: 14 } }, "🏪 Orders by Branch"),
       Object.entries(branches).map(([branch, count]) =>
         React.createElement("div", { key: branch, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid #F3F4F6", fontSize: 13 } },
-          React.createElement("span", { style: { color: "#6B7280" } }, branch === "kakkiyah" ? "🏪 Kakkiyah" : branch === "subhani" ? "🏪 Subhani" : branch === "waliy" ? "🏪 Waliy Al Ahd" : branch),
+          React.createElement("span", { style: { color: "#6B7280" } }, "🏪 " + (function(id){
+            var list = (window.__branchList || []);
+            var b = list.find && list.find(function(x){ return x && x.id === id; });
+            return (b && (b.name || b.nameEn)) || String(id).charAt(0).toUpperCase() + String(id).slice(1);
+          })(branch)),
           React.createElement("span", { style: { color: "#E60000", fontWeight: 700 } }, count + " orders")
         )
       )
@@ -4840,7 +4906,11 @@ function App() {
       if (!window.FB || !window.FB.onBranchesChange) { setTimeout(attach, 400); return; }
       return window.FB.onBranchesChange((bs) => {
         if (!bs || !bs.length) return;
-        setBranchList(bs.map(normalizeBranch));
+        var norm = bs.map(normalizeBranch);
+        setBranchList(norm);
+        // Expose for module-scope helpers (order cards, branch breakdown) so
+        // no branch name is hardcoded — new branches Just Work.
+        try { window.__branchList = norm; } catch(_){}
       });
     };
     const unsub = attach();
@@ -5358,9 +5428,10 @@ function App() {
           React.createElement("div", { style: { fontFamily: "'Sora',sans-serif", fontWeight: 800, fontSize: 14, color: "#1A1D27", letterSpacing: "-0.3px" } }, "Broast Albahr"),
           React.createElement("div", { style: { fontSize: 10, color: "#6B7280", fontWeight: 500 } },
             selectedBranch === "all" ? "All Branches" :
-            selectedBranch === "kakkiyah" ? "🏪 Kakkiyah" :
-            selectedBranch === "subhani" ? "🏪 Subhani" :
-            selectedBranch === "waliy" ? "🏪 Waliy Al Ahd" : "Admin"
+            (function(){
+              var b = (BRANCHES || branchList || []).find(function(x){ return x && x.id === selectedBranch; });
+              return b ? ("🏪 " + (b.name || b.id)) : "Admin";
+            })()
           )
         )
       ),
@@ -5541,8 +5612,44 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         onChange: function(cb){ return onAuthStateChanged(_auth, cb); },
         reset: function(email){ return sendPasswordResetEmail(_auth, email); },
         current: function(){ return _auth.currentUser; },
-        // Create a new staff Firebase Auth user without signing the owner out.
-        // Uses a secondary Firebase app instance for isolation.
+
+        // Server-side owner-only branch-user provisioning. Preferred over
+        // the client-side `createStaff` below because it runs under the
+        // Admin SDK: owner is verified by ID token, custom claims + users/{uid}
+        // + branch existence are checked atomically, and the action lands in
+        // auditLogs. Falls back to createStaff only if the callable isn't
+        // deployed yet.
+        createBranchUser: async function(data){
+          try {
+            var call = httpsCallable(_fns, "createBranchUser");
+            var res = await call(data);
+            return { ok: !!(res && res.data && res.data.ok), uid: res && res.data && res.data.uid, data: res && res.data };
+          } catch(e) { return { ok: false, error: (e && e.code) || (e && e.message) || "error" }; }
+        },
+        resetBranchUserPassword: async function(data){
+          try {
+            var call = httpsCallable(_fns, "resetBranchUserPassword");
+            var res = await call(data);
+            return { ok: !!(res && res.data && res.data.ok) };
+          } catch(e) { return { ok: false, error: (e && e.code) || (e && e.message) || "error" }; }
+        },
+        setBranchUserStatus: async function(data){
+          try {
+            var call = httpsCallable(_fns, "setBranchUserStatus");
+            var res = await call(data);
+            return { ok: !!(res && res.data && res.data.ok) };
+          } catch(e) { return { ok: false, error: (e && e.code) || (e && e.message) || "error" }; }
+        },
+        deleteBranchUser: async function(data){
+          try {
+            var call = httpsCallable(_fns, "deleteBranchUser");
+            var res = await call(data);
+            return { ok: !!(res && res.data && res.data.ok) };
+          } catch(e) { return { ok: false, error: (e && e.code) || (e && e.message) || "error" }; }
+        },
+
+        // LEGACY client-side path — kept as a fallback until the new callables
+        // are deployed. New code should use createBranchUser instead.
         createStaff: async function(email, pw, profile){
           var name = "secondary_" + Date.now();
           var sec = initializeApp(_fbConfig, name);
