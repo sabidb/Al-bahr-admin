@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.25.1";
+const APP_VERSION = "8.25.2";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -997,8 +997,26 @@ function PrinterSetup({ isOwner, branches, branchScope }) {
         )
       ),
       detected.length > 0 && React.createElement("div", { style: { marginTop: 10, background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 10, padding: "10px 12px", fontSize: 12, color: "#374151" } },
-        React.createElement("div", { style: { fontWeight: 700, marginBottom: 6 } }, "Printers found:"),
-        detected.map((p, i) => React.createElement("div", { key: i, style: { fontFamily: "monospace", fontSize: 11.5, padding: "2px 0" } }, "• " + p))
+        React.createElement("div", { style: { fontWeight: 700, marginBottom: 6 } }, "Printers QZ Tray sees — tap to copy exact name:"),
+        React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } },
+          detected.map((p, i) => React.createElement("button", {
+            key: i,
+            onClick: () => {
+              // Copy the exact printer string (as QZ Tray reports it) so
+              // there's zero chance of a hidden-whitespace mismatch when
+              // the operator pastes into the printer name field.
+              try { navigator.clipboard.writeText(String(p)); } catch (_) {}
+              // Also auto-fill the default printer field to save a click
+              // for the most common case (one printer per computer).
+              setField("printerName", String(p));
+              const t = TP(); if (t && t.showStatus) t.showStatus("📋 Copied + set as default", "ok");
+              else alert("Copied: " + p + "\nAlso set as Default printer. Press Save to persist.");
+            },
+            style: { fontFamily: "monospace", fontSize: 11.5, padding: "6px 10px", background: "#fff", border: "1px solid #E5E7EB", borderRadius: 8, cursor: "pointer", textAlign: "left" }
+          }, "📋 " + p))
+        ),
+        React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", marginTop: 8, lineHeight: 1.55 } },
+          "Tapping a printer above copies the name to your clipboard AND sets it as the Default printer — paste into per-branch fields as needed, then press Save.")
       )
     ),
 
@@ -6711,6 +6729,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         } catch (e) { console.warn("cert download failed:", e); return false; }
       },
       getCertificatePEM: function () { return QZ_CERT_PEM; },
+      showStatus: function (msg, level) { showStatus(msg, level); },
       // Pre-claim a dedup key so the Firestore listener's auto-print hook
       // won't race with an explicit Accept-triggered print. Persistent.
       markPrinted: function (order) { if (order) { PRINTED_IDS.add(_dedupKey(order)); saveDedup(); } },
