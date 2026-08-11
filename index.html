@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.30.0";
+const APP_VERSION = "8.30.1";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -4979,6 +4979,8 @@ function App() {
           });
           if (!window.__setUnsub) window.__setUnsub = _u;
         }
+        // Branch admins MUST subscribe with a branch filter — the rules only allow
+        // reading orders for their own branch. Owners subscribe unscoped.
         unsubOrders = window.FB.onOrdersChange(fbOrders => {
           // Deduplicate by fbId to prevent double orders
           const seen = new Set();
@@ -5071,7 +5073,7 @@ function App() {
           } else {
             newOnes.forEach(o => seenOnLoadRef.current.add(o.fbId || o.orderNo));
           }
-        });
+        }, branchScope || undefined);
       } catch(e) { console.log("Firebase admin err:", e); }
     })();
     }; // end startListeners
@@ -5921,7 +5923,20 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         }catch(e){ return null; } },
         onMenuChange: function(cb){ return onSnapshot(doc(_db,"settings","menu"),function(s){ if(s.exists())cb(s.data().menu); }); },
         onSettingsChange: function(cb){ return onSnapshot(doc(_db,"settings","restaurant"),function(s){ if(s.exists())cb(s.data()); }); },
-        onOrdersChange: function(cb){ return onSnapshot(collection(_db,"orders"),function(s){ var o=s.docs.map(function(d){ return Object.assign({fbId:d.id},d.data()); }); o.sort(function(a,b){ return ((b.createdAt&&b.createdAt.seconds)||0)-((a.createdAt&&a.createdAt.seconds)||0); }); cb(o); }); },
+        // Firestore rules restrict branch admins to orders where branch == their branchId.
+        // A collection-level query without a matching where() clause is rejected wholesale
+        // (no partial reads), so branch admins would see zero orders. Pass branchScope in
+        // when the caller is a branch user and add the where() so the query matches the rule.
+        onOrdersChange: function(cb, branchScope){
+          var ref = branchScope
+            ? query(collection(_db,"orders"), where("branch","==", branchScope))
+            : collection(_db,"orders");
+          return onSnapshot(ref, function(s){
+            var o=s.docs.map(function(d){ return Object.assign({fbId:d.id},d.data()); });
+            o.sort(function(a,b){ return ((b.createdAt&&b.createdAt.seconds)||0)-((a.createdAt&&a.createdAt.seconds)||0); });
+            cb(o);
+          }, function(err){ window.__fbErr && window.__fbErr("orders subscribe", err); });
+        },
         onCustomersChange: function(cb){ return onSnapshot(collection(_db,"customers"),function(s){ cb(s.docs.map(function(d){ return Object.assign({id:d.id},d.data()); })); }); },
         // ---- Phase 3 additions: coupons/offers docs + push-notifications ----
         // Coupons and Offers each live in one Firestore doc under settings/*
@@ -7587,7 +7602,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       if (!window.FB) return;
       clearInterval(_origFBReady);
       var _orig = window.FB.onOrdersChange;
-      window.FB.onOrdersChange = function (cb) {
+      window.FB.onOrdersChange = function (cb, branchScope) {
         return _orig.call(window.FB, function (orders) {
           // Pass the FULL order through to the print pipeline. The earlier
           // trimmed projection dropped couponCode / reward / totals /
@@ -7603,7 +7618,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
             });
           }));
           cb(orders);
-        });
+        }, branchScope);
       };
       console.log("🖨️ Thermal print module ready");
     }, 300);
