@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.24.1";
+const APP_VERSION = "8.25.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -801,6 +801,7 @@ function PrinterSetup({ isOwner, branches, branchScope }) {
   const [stats, setStats] = React.useState({ ok: 0, fail: 0, fallback: 0, lastFailAt: null, lastFailMsg: null });
   const [showLog, setShowLog] = React.useState(false);
   const [log, setLog] = React.useState([]);
+  const [showCertHelp, setShowCertHelp] = React.useState(false);
 
   React.useEffect(() => {
     // Poll the printer bridge for connection status + print stats. The
@@ -889,6 +890,48 @@ function PrinterSetup({ isOwner, branches, branchScope }) {
             connected ? "Ready for silent thermal printing." : "Install QZ Tray on this computer and make sure it's running.")
         ),
         !connected && React.createElement("a", { href: "https://qz.io/download/", target: "_blank", style: { background: "#FFF7ED", border: "1px solid #FED7AA", color: "#EA580C", padding: "9px 14px", borderRadius: 10, fontSize: 12, fontWeight: 700, textDecoration: "none" } }, "Download →")
+      )
+    ),
+
+    // ── Certificate install (silent-print unlock) ────────────
+    // QZ Tray Community edition greys out the Allow button as soon as
+    // "Remember this decision" is ticked — that path only works for a
+    // pre-approved override certificate. This card downloads the cert
+    // that matches the one we sign requests with, plus shows the exact
+    // folder to drop it in. Once in place, QZ Tray auto-trusts every
+    // future signed request — no prompts at all.
+    React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14, border: "1.5px solid #FED7AA", background: "#FFFBEB" } },
+      React.createElement("div", { style: { display: "flex", alignItems: "flex-start", gap: 12 } },
+        React.createElement("div", { style: { width: 42, height: 42, borderRadius: 12, background: "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 } }, "🔐"),
+        React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+          React.createElement("div", { style: { fontWeight: 800, fontSize: 15, color: "#92400E" } }, "Install printer certificate — one-time silent-print setup"),
+          React.createElement("div", { style: { fontSize: 12, color: "#78350F", marginTop: 4, lineHeight: 1.55 } },
+            "If QZ Tray keeps prompting you to Allow every print, or ticking \"Remember this decision\" disables the Allow button, install our printer certificate as an override. After this, every print is silent — no prompts. One time per computer."),
+          React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" } },
+            React.createElement("button", {
+              onClick: () => { const t = TP(); if (t && t.downloadCertificate) t.downloadCertificate(); },
+              style: { padding: "10px 14px", background: "#E10600", color: "#fff", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 800, cursor: "pointer" }
+            }, "⬇️ Download override.crt"),
+            React.createElement("button", {
+              onClick: () => setShowCertHelp(v => !v),
+              style: { padding: "10px 14px", background: "#fff", color: "#92400E", border: "1.5px solid #FDE68A", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer" }
+            }, showCertHelp ? "Hide steps" : "Show install steps")
+          ),
+          showCertHelp && React.createElement("div", { style: { marginTop: 12, background: "#fff", border: "1px solid #FDE68A", borderRadius: 10, padding: 14, fontSize: 12, color: "#1F2937", lineHeight: 1.7 } },
+            React.createElement("div", { style: { fontWeight: 800, marginBottom: 8, color: "#92400E" } }, "Install steps (Windows):"),
+            React.createElement("ol", { style: { paddingLeft: 18, margin: 0 } },
+              React.createElement("li", null, "Click ", React.createElement("b", null, "⬇️ Download override.crt"), " above."),
+              React.createElement("li", null, "Press ", React.createElement("kbd", { style: { background: "#F3F4F6", border: "1px solid #E5E7EB", padding: "1px 6px", borderRadius: 4, fontFamily: "monospace", fontSize: 11 } }, "Win + R"), ", type ", React.createElement("code", { style: { background: "#F3F4F6", padding: "1px 6px", borderRadius: 4, fontFamily: "monospace" } }, "%APPDATA%\\qz"), " and press Enter."),
+              React.createElement("li", null, "Drop the downloaded ", React.createElement("code", { style: { background: "#F3F4F6", padding: "1px 6px", borderRadius: 4, fontFamily: "monospace" } }, "override.crt"), " into that folder. If a file with the same name already exists, replace it."),
+              React.createElement("li", null, "Right-click the QZ Tray icon in the system tray → ", React.createElement("b", null, "Exit"), ", then start QZ Tray again from the Start menu."),
+              React.createElement("li", null, "Come back here and print a test — no prompt should appear.")
+            ),
+            React.createElement("div", { style: { fontWeight: 800, marginTop: 12, marginBottom: 6, color: "#92400E" } }, "Mac:"),
+            React.createElement("div", null, "Save the file as ", React.createElement("code", { style: { background: "#F3F4F6", padding: "1px 6px", borderRadius: 4, fontFamily: "monospace" } }, "~/Library/Application Support/qz/override.crt"), ", then quit + restart QZ Tray from the menu bar."),
+            React.createElement("div", { style: { fontWeight: 800, marginTop: 12, marginBottom: 6, color: "#92400E" } }, "Linux:"),
+            React.createElement("div", null, "Save the file as ", React.createElement("code", { style: { background: "#F3F4F6", padding: "1px 6px", borderRadius: 4, fontFamily: "monospace" } }, "~/.qz/override.crt"), ", then restart QZ Tray.")
+          )
+        )
       )
     ),
 
@@ -1338,28 +1381,103 @@ function InvoiceSetup({ isOwner, branches, branchScope }) {
     )
     ), // /LEFT COLUMN
 
-    // ── RIGHT COLUMN: compact sticky live preview ───────────
-    // Fixed-width column so the left-form gets the rest of the row. The
-    // inner card is sticky so the preview stays visible while the admin
-    // scrolls through every settings section on the left.
-    React.createElement("div", { style: { width: 260, flexShrink: 0, alignSelf: "flex-start", position: "sticky", top: 12 } },
-      React.createElement("div", { className: "card", style: { padding: 10, border: "1.5px solid #E10600", background: "#fff" } },
-        React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 6 } },
-          React.createElement("div", { style: { fontWeight: 800, fontSize: 12, color: "#111827" } }, "👁️ Live preview"),
-          React.createElement("div", { style: { display: "flex", gap: 4 } },
-            ["customer", "kitchen"].map(k => React.createElement("button", {
-              key: k, onClick: () => setPreviewKind(k), title: k === "customer" ? "Customer receipt" : "Kitchen ticket",
-              style: { padding: "4px 8px", borderRadius: 999, border: "1.5px solid " + (previewKind === k ? "#E10600" : "#EAECF2"), background: previewKind === k ? "#FFF1F2" : "#fff", color: previewKind === k ? "#E10600" : "#6B7280", fontSize: 11, fontWeight: 700, cursor: "pointer" }
-            }, k === "customer" ? "🧾" : "👨‍🍳"))
+    // ── RIGHT COLUMN: sticky live preview + quick styles ────
+    // Fixed-width column so the left-form gets the rest of the row.
+    // Sticky so the preview stays visible while the admin scrolls the
+    // form. Includes a compact quick-styles panel underneath so the
+    // most-used size dials are one click away from the preview.
+    React.createElement("div", { style: { width: 360, flexShrink: 0, alignSelf: "flex-start", position: "sticky", top: 12 } },
+      React.createElement("div", { className: "card", style: { padding: 12, border: "1.5px solid #E10600", background: "#fff" } },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 6 } },
+          React.createElement("div", { style: { fontWeight: 800, fontSize: 13, color: "#111827" } }, "👁️ Live preview"),
+          React.createElement("div", { style: { display: "flex", gap: 5 } },
+            [["customer","🧾 Customer"], ["kitchen","👨‍🍳 Kitchen"]].map(([k,l]) => React.createElement("button", {
+              key: k, onClick: () => setPreviewKind(k),
+              style: { padding: "5px 10px", borderRadius: 999, border: "1.5px solid " + (previewKind === k ? "#E10600" : "#EAECF2"), background: previewKind === k ? "#FFF1F2" : "#fff", color: previewKind === k ? "#E10600" : "#6B7280", fontSize: 11, fontWeight: 700, cursor: "pointer" }
+            }, l))
           )
         ),
-        React.createElement("div", { style: { background: "#F4F5F9", borderRadius: 8, padding: 6, maxHeight: 520, overflow: "auto" } },
+        React.createElement("div", { style: { background: "#F4F5F9", borderRadius: 8, padding: 8, maxHeight: 640, overflow: "auto" } },
           React.createElement("iframe", {
             ref: previewFrame, title: "Receipt live preview",
-            style: { width: "100%", height: 500, border: "1px solid #E5E7EB", background: "#fff", boxShadow: "0 2px 10px rgba(0,0,0,0.08)", display: "block" }
+            style: { width: "100%", height: 620, border: "1px solid #E5E7EB", background: "#fff", boxShadow: "0 2px 12px rgba(0,0,0,0.08)", display: "block" }
           })
         ),
-        React.createElement("div", { style: { fontSize: 10, color: "#9CA3AF", marginTop: 6, textAlign: "center", lineHeight: 1.4 } }, "Live — not saved until Save")
+        React.createElement("div", { style: { fontSize: 10, color: "#9CA3AF", marginTop: 6, textAlign: "center", lineHeight: 1.4 } }, "Live — not saved until Save"),
+
+        // ── Quick style dials — the handful of controls the admin
+        // actually reaches for while eyeballing the preview. All the
+        // finer knobs still live in the full "Print styles" card on the
+        // left column; these mirror the same setField() so both stay in
+        // sync.
+        React.createElement("div", { style: { marginTop: 12, paddingTop: 12, borderTop: "1px dashed #E5E7EB" } },
+          React.createElement("div", { style: { fontWeight: 800, fontSize: 11, color: "#6B7280", letterSpacing: 0.5, marginBottom: 8 } }, "QUICK STYLES"),
+
+          // Base font (browser preview + fallback) — most-used dial
+          React.createElement("div", { style: { marginBottom: 8 } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: "#374151", marginBottom: 3, fontWeight: 700 } },
+              React.createElement("span", null, "Base font"),
+              React.createElement("span", { style: { color: "#6B7280" } }, (effective.fontHtmlPx == null ? 15 : effective.fontHtmlPx) + "px")
+            ),
+            React.createElement("input", { type: "range", min: 10, max: 24, value: effective.fontHtmlPx == null ? 15 : effective.fontHtmlPx, onChange: e => setField("fontHtmlPx", Number(e.target.value)), style: { width: "100%" } })
+          ),
+
+          // Paper width (chars) — swaps 58/72/80mm layouts
+          React.createElement("div", { style: { marginBottom: 8 } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: "#374151", marginBottom: 3, fontWeight: 700 } },
+              React.createElement("span", null, "Paper width"),
+              React.createElement("span", { style: { color: "#6B7280" } }, (effective.paperWidth || 32) + " chars")
+            ),
+            React.createElement("select", {
+              className: "inp", style: { padding: "6px 8px", fontSize: 12 },
+              value: effective.paperWidth || 32, onChange: e => setField("paperWidth", Number(e.target.value))
+            },
+              React.createElement("option", { value: 32 }, "58mm (32 chars)"),
+              React.createElement("option", { value: 42 }, "72mm (42 chars)"),
+              React.createElement("option", { value: 48 }, "80mm (48 chars)")
+            )
+          ),
+
+          // A short grid of the four section sizes the admin tweaks 90%
+          // of the time — order #, header, item name, total row.
+          (function () {
+            const SIZE_OPTIONS = [
+              { v: "small",  l: "S" },
+              { v: "normal", l: "M" },
+              { v: "tall",   l: "Tall" },
+              { v: "big",    l: "Big" },
+              { v: "huge",   l: "Huge" }
+            ];
+            const quickRows = [
+              { key: "sizeOrderNo",    label: "Order #" },
+              { key: "sizeHeader",     label: "Header" },
+              { key: "sizeItemName",   label: "Item name" },
+              { key: "sizeItemQty",    label: "Item qty" },
+              { key: "sizeTotalLabel", label: "Total row" }
+            ];
+            return React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 } },
+              ...quickRows.flatMap(r => [
+                React.createElement("div", { key: r.key + "-l", style: { fontSize: 11, color: "#374151", fontWeight: 600, alignSelf: "center" } }, r.label),
+                React.createElement("select", {
+                  key: r.key + "-s", className: "inp",
+                  style: { padding: "4px 6px", fontSize: 11 },
+                  value: effective[r.key] || "normal",
+                  onChange: e => setField(r.key, e.target.value)
+                }, SIZE_OPTIONS.map(o => React.createElement("option", { key: o.v, value: o.v }, o.l)))
+              ])
+            );
+          })(),
+
+          // Bold toggles for the two rows that most benefit from it
+          React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", fontSize: 11 } },
+            [["boldOrderNo","Bold order #"], ["boldItemName","Bold items"], ["boldTotal","Bold total"], ["italicFooter","Italic footer"]].map(([k,l]) =>
+              React.createElement("label", { key: k, style: { display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer", color: "#374151" } },
+                React.createElement("input", { type: "checkbox", checked: !!effective[k], onChange: e => setField(k, e.target.checked), style: { width: 14, height: 14 } }),
+                l
+              )
+            )
+          )
+        )
       )
     )
 
@@ -6577,6 +6695,26 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       // in an iframe so the admin sees pending edits before Save.
       renderCustomerHTML: function (order, cfgOverride) { return buildReceiptHTML(order || {}, cfgOverride); },
       renderKitchenHTML:  function (order, cfgOverride) { return buildKitchenReceiptHTML(order || {}, cfgOverride); },
+      // Certificate export — QZ Tray Community edition only lets
+      // "Remember this decision" persist for certificates installed as
+      // override.crt in QZ's config folder. This helper triggers a
+      // browser download of that file so the operator can drop it into
+      // %APPDATA%\qz\override.crt (Windows) / ~/Library/Application
+      // Support/qz/override.crt (Mac) / ~/.qz/override.crt (Linux) and
+      // restart QZ Tray. After that every print is silent — no prompt
+      // at all.
+      downloadCertificate: function () {
+        try {
+          var blob = new Blob([QZ_CERT_PEM + "\n"], { type: "application/x-x509-ca-cert" });
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement("a");
+          a.href = url; a.download = "override.crt";
+          document.body.appendChild(a); a.click();
+          setTimeout(function () { try { a.remove(); URL.revokeObjectURL(url); } catch (_) {} }, 500);
+          return true;
+        } catch (e) { console.warn("cert download failed:", e); return false; }
+      },
+      getCertificatePEM: function () { return QZ_CERT_PEM; },
       // Pre-claim a dedup key so the Firestore listener's auto-print hook
       // won't race with an explicit Accept-triggered print. Persistent.
       markPrinted: function (order) { if (order) { PRINTED_IDS.add(_dedupKey(order)); saveDedup(); } },
