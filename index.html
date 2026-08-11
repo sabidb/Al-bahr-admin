@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.23.0";
+const APP_VERSION = "8.24.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -791,7 +791,7 @@ function CouponsTabNew() {
 // branch printer; owner sees the default plus every branch.
 function PrinterSetup({ isOwner, branches, branchScope }) {
   const TP = () => (typeof window !== "undefined" ? window.ThermalPrint : null);
-  const initial = () => (TP() && TP().getConfig ? TP().getConfig() : { printerName: "PP9000EU", copies: 1, autoPrint: true, printerMap: {} });
+  const initial = () => (TP() && TP().getConfig ? TP().getConfig() : { printerName: "PP9000EU", copies: 1, autoPrint: true, printerMap: {}, kitchenPrinterName: "", kitchenPrinterMap: {} });
   const [cfg, setCfg] = React.useState(initial());
   const [connected, setConnected] = React.useState(false);
   const [saved, setSaved] = React.useState(false);
@@ -835,6 +835,11 @@ function PrinterSetup({ isOwner, branches, branchScope }) {
     if (v) map[branchId] = v; else delete map[branchId];
     return Object.assign({}, c, { printerMap: map });
   });
+  const setKitchenBranchPrinter = (branchId, v) => setCfg(c => {
+    const map = Object.assign({}, c.kitchenPrinterMap || {});
+    if (v) map[branchId] = v; else delete map[branchId];
+    return Object.assign({}, c, { kitchenPrinterMap: map });
+  });
 
   const save = () => {
     const t = TP(); if (!t) return;
@@ -842,6 +847,10 @@ function PrinterSetup({ isOwner, branches, branchScope }) {
     t.setCopies(cfg.copies || 1);
     t.setAutoPrint(!!cfg.autoPrint);
     (branches || []).forEach(b => { t.setBranchPrinter(b.id, (cfg.printerMap && cfg.printerMap[b.id]) || ""); });
+    if (t.setKitchenPrinterName) t.setKitchenPrinterName(cfg.kitchenPrinterName || "");
+    if (t.setKitchenBranchPrinter) {
+      (branches || []).forEach(b => { t.setKitchenBranchPrinter(b.id, (cfg.kitchenPrinterMap && cfg.kitchenPrinterMap[b.id]) || ""); });
+    }
     setSaved(true); setTimeout(() => setSaved(false), 2000);
   };
 
@@ -958,10 +967,10 @@ function PrinterSetup({ isOwner, branches, branchScope }) {
         React.createElement("button", { onClick: () => testPrint(""), className: "btn-secondary", style: { padding: "0 14px", fontSize: 12 } }, "🖨️ Test"))
     ),
 
-    // Per-branch printers
+    // Per-branch printers (customer receipt)
     React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14 } },
-      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 4 } }, isOwner ? "Per-branch printers" : "Your branch printer"),
-      React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 14 } }, "Leave a branch blank to fall back to the default printer."),
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 4 } }, isOwner ? "Per-branch customer printers" : "Your branch customer printer"),
+      React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 14 } }, "Full customer receipt. Leave blank to fall back to the default printer."),
       visibleBranches.map(b => React.createElement("div", { key: b.id, style: { marginBottom: 12 } },
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } },
           React.createElement("span", { style: { fontSize: 15 } }, "🏪"),
@@ -975,10 +984,37 @@ function PrinterSetup({ isOwner, branches, branchScope }) {
       ))
     ),
 
+    // ── Kitchen printer (default + per-branch) ─────────────
+    // Kitchen ticket = order #, date/time, items + qty only. Leave BOTH the
+    // default and every per-branch field blank to disable the kitchen ticket
+    // entirely (branches that print at the counter don't need one).
+    isOwner && React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14, border: "1.5px solid #FED7AA" } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 4 } }, "👨‍🍳 Kitchen printer (default)"),
+      React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 14 } }, "Fallback kitchen printer used when a branch doesn't set its own. Leave blank to disable kitchen tickets globally."),
+      rowInput("KITCHEN PRINTER NAME (as seen by QZ Tray)", cfg.kitchenPrinterName, v => setField("kitchenPrinterName", v), "e.g. KitchenPP9000EU (blank = no kitchen ticket)",
+        React.createElement("button", { onClick: () => testPrint(""), className: "btn-secondary", style: { padding: "0 14px", fontSize: 12 } }, "🖨️ Test"))
+    ),
+
+    React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14, border: "1.5px solid #FED7AA" } },
+      React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27", marginBottom: 4 } }, isOwner ? "👨‍🍳 Per-branch kitchen printers" : "👨‍🍳 Your branch kitchen printer"),
+      React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 14 } }, "Where the kitchen ticket goes for each branch. Blank = use the default kitchen printer (or skip if that's blank too)."),
+      visibleBranches.map(b => React.createElement("div", { key: b.id + "-kit", style: { marginBottom: 12 } },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } },
+          React.createElement("span", { style: { fontSize: 15 } }, "👨‍🍳"),
+          React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#1A1D27" } }, b.name),
+          React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF" } }, "· " + (b.nameAr || ""))
+        ),
+        React.createElement("div", { style: { display: "flex", gap: 8 } },
+          React.createElement("input", { className: "inp", value: (cfg.kitchenPrinterMap && cfg.kitchenPrinterMap[b.id]) || "", onChange: e => setKitchenBranchPrinter(b.id, e.target.value), placeholder: "leave blank to use default", style: { flex: 1 } }),
+          React.createElement("button", { onClick: () => testPrint(b.id), className: "btn-secondary", style: { padding: "0 14px", fontSize: 12 } }, "🖨️ Test")
+        )
+      ))
+    ),
+
     React.createElement("button", { onClick: save, className: "btn-primary", style: { width: "100%", padding: "14px", fontSize: 14, marginTop: 4 } }, "💾 Save printer settings"),
 
     React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", marginTop: 12, lineHeight: 1.55, padding: "0 4px" } },
-      "Uses QZ Tray for silent ESC/POS raw printing — no OS dialog appears. Install QZ Tray on each computer that has a thermal printer attached. Printer names must match exactly what appears in Windows / Mac printer settings."
+      "Uses QZ Tray for silent ESC/POS raw printing — no OS dialog appears. The first print after install shows a QZ Tray Allow/Block prompt: click Allow and tick “Remember this decision” once per computer and every future print is silent. Printer names must match exactly what appears in Windows / Mac printer settings."
     )
   );
 }
@@ -995,6 +1031,9 @@ function InvoiceSetup({ isOwner, branches, branchScope }) {
   const [scope, setScope] = React.useState(isOwner ? "global" : (branchScope || (branches && branches[0] && branches[0].id) || "global"));
   const [saved, setSaved] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
+  // Live preview: which of the two receipts is showing right now.
+  const [previewKind, setPreviewKind] = React.useState("customer");
+  const previewFrame = React.useRef(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -1044,10 +1083,11 @@ function InvoiceSetup({ isOwner, branches, branchScope }) {
     setSaved(true); setTimeout(() => setSaved(false), 2200);
   };
 
-  const testPrint = () => {
-    if (!window.ThermalPrint) { alert("Printer bridge not loaded."); return; }
+  // Sample order used for the live preview + test-print button. Kept in one
+  // place so both paths render exactly the same layout.
+  const previewOrder = React.useMemo(() => {
     const branchId = scope === "global" ? (branchScope || (branches && branches[0] && branches[0].id) || "kakkiyah") : scope;
-    window.ThermalPrint.print({
+    return {
       orderNo: "100000", branch: branchId,
       orderType: "pickup", paymentMethod: "cash",
       userName: "Preview Customer", userPhone: "0500000000",
@@ -1057,8 +1097,33 @@ function InvoiceSetup({ isOwner, branches, branchScope }) {
       date: new Date().toISOString(),
       // Preview the reward QR block so operators can eyeball placement + size
       // before real reward orders start coming through.
-      reward: { code: "ALB9K4XQ72PZ", label: "Free Fries next order" }
-    });
+      reward: { code: "ALB9K4XQ72PZ", label: "Free Fries next order" },
+      note: "Extra sauce please"
+    };
+  }, [scope, branchScope, branches]);
+
+  // Live preview — re-render the receipt HTML inside the iframe on every
+  // cfg edit so the admin sees the effect of each toggle immediately. Uses
+  // the ThermalPrint render helpers with the PENDING cfg (not the saved
+  // one) as an override so nothing is committed until Save is pressed.
+  React.useEffect(() => {
+    const f = previewFrame.current;
+    const TP = window.ThermalPrint;
+    if (!f || !TP) return;
+    const render = previewKind === "kitchen" ? TP.renderKitchenHTML : TP.renderCustomerHTML;
+    if (typeof render !== "function") return;
+    let html = "";
+    try { html = render(previewOrder, cfg); } catch (e) { html = "<pre style='padding:12px;color:#B91C1C'>Preview error: " + (e && e.message ? e.message : String(e)) + "</pre>"; }
+    try {
+      f.srcdoc = html;
+    } catch (_) {
+      try { f.contentDocument.open(); f.contentDocument.write(html); f.contentDocument.close(); } catch (__) {}
+    }
+  }, [cfg, previewKind, previewOrder]);
+
+  const testPrint = () => {
+    if (!window.ThermalPrint) { alert("Printer bridge not loaded."); return; }
+    window.ThermalPrint.print(previewOrder);
   };
 
   // ── Small form primitives ────────────────────────────────
@@ -1104,6 +1169,29 @@ function InvoiceSetup({ isOwner, branches, branchScope }) {
       "🏪 Editing invoice for: ", React.createElement("b", null, (branches && branches.find(b => b.id === branchScope) || {}).name || branchScope || "-")),
 
     loading && React.createElement("div", { className: "card", style: { padding: 16, marginBottom: 12, fontSize: 12, color: "#6B7280" } }, "Loading current template…"),
+
+    // ── Live preview ────────────────────────────────────────
+    // Re-renders on every field change (see useEffect above). Toggle
+    // between the customer receipt and the kitchen ticket so the admin
+    // can see both layouts on the same paper width before saving.
+    React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 14, position: "sticky", top: 8, zIndex: 5, background: "#fff", border: "1.5px solid #E10600" } },
+      React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8, flexWrap: "wrap" } },
+        React.createElement("div", { style: { fontWeight: 800, fontSize: 14, color: "#111827" } }, "👁️ Live preview"),
+        React.createElement("div", { style: { display: "flex", gap: 6 } },
+          ["customer", "kitchen"].map(k => React.createElement("button", {
+            key: k, onClick: () => setPreviewKind(k),
+            style: { padding: "6px 12px", borderRadius: 999, border: "1.5px solid " + (previewKind === k ? "#E10600" : "#EAECF2"), background: previewKind === k ? "#FFF1F2" : "#fff", color: previewKind === k ? "#E10600" : "#6B7280", fontSize: 12, fontWeight: 700, cursor: "pointer", textTransform: "capitalize" }
+          }, k === "customer" ? "🧾 Customer" : "👨‍🍳 Kitchen"))
+        )
+      ),
+      React.createElement("div", { style: { display: "flex", justifyContent: "center", background: "#F4F5F9", borderRadius: 10, padding: 10, maxHeight: 460, overflow: "auto" } },
+        React.createElement("iframe", {
+          ref: previewFrame, title: "Receipt live preview",
+          style: { width: "300px", minHeight: 420, border: "1px solid #E5E7EB", background: "#fff", boxShadow: "0 2px 12px rgba(0,0,0,0.08)" }
+        })
+      ),
+      React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", marginTop: 8, textAlign: "center" } }, "Reflects every change above · not saved until you press Save")
+    ),
 
     // Header
     React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14 } },
@@ -5102,15 +5190,18 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     }
     function saveCfg() {
       try { localStorage.setItem(LS_KEY, JSON.stringify({
-        printerName: PRINTER_NAME, copies: COPIES, autoPrint: AUTO_PRINT, printerMap: PRINTER_MAP
+        printerName: PRINTER_NAME, copies: COPIES, autoPrint: AUTO_PRINT, printerMap: PRINTER_MAP,
+        kitchenPrinterName: KITCHEN_PRINTER_NAME, kitchenPrinterMap: KITCHEN_PRINTER_MAP
       })); } catch(e){}
     }
 
     var _saved = loadCfg() || {};
-    var PRINTER_NAME = _saved.printerName || "PP9000EU";  // default / fallback printer
+    var PRINTER_NAME = _saved.printerName || "PP9000EU";  // default / fallback customer-receipt printer
     var AUTO_PRINT   = _saved.autoPrint !== false;         // auto-print every new order
     var COPIES       = _saved.copies || 1;                 // number of copies per order
-    var PRINTER_MAP  = _saved.printerMap || {};            // { kakkiyah:"PP9000EU-1", subhani:"...", waliy:"..." }
+    var PRINTER_MAP  = _saved.printerMap || {};            // per-branch customer printer { kakkiyah:"PP9000EU-1", ... }
+    var KITCHEN_PRINTER_NAME = _saved.kitchenPrinterName || "";  // default kitchen printer (blank = disable kitchen ticket globally)
+    var KITCHEN_PRINTER_MAP  = _saved.kitchenPrinterMap  || {};  // per-branch kitchen printer overrides
     var BRANCH_FILTER = "";                                // set by branch selection — only print matching branch
 
     // ── Phase 8: reliability ────────────────────────────────
@@ -5174,6 +5265,113 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
 
     var statusEl = null;
 
+    // ── QZ Tray signing (silent, no OS/Allow prompts) ────────
+    // We ship a self-signed SHA-512 RSA cert + private key with the app.
+    // QZ Tray recognises signed requests — the user clicks "Allow" +
+    // "Remember this decision" once (or drops override.crt into
+    // %APPDATA%/qz/ for zero prompts) and every subsequent print is silent.
+    // Because the key is embedded, ANYONE serving this HTML from the same
+    // origin can print silently — acceptable for a private admin panel that
+    // only cashiers open on trusted branch machines.
+    var QZ_CERT_PEM = [
+      "-----BEGIN CERTIFICATE-----",
+      "MIIDZzCCAk+gAwIBAgIUIhmsIgR2flYZ8VoEvblqAP87F98wDQYJKoZIhvcNAQEN",
+      "BQAwQzEcMBoGA1UEAwwTQnJvYXN0IEFsYmFociBBZG1pbjEWMBQGA1UECgwNQnJv",
+      "YXN0IEFsYmFocjELMAkGA1UEBhMCU0EwHhcNMjYwODExMTAxMTQzWhcNNDYwODA2",
+      "MTAxMTQzWjBDMRwwGgYDVQQDDBNCcm9hc3QgQWxiYWhyIEFkbWluMRYwFAYDVQQK",
+      "DA1Ccm9hc3QgQWxiYWhyMQswCQYDVQQGEwJTQTCCASIwDQYJKoZIhvcNAQEBBQAD",
+      "ggEPADCCAQoCggEBAIyEiDOEsIi5hKTnDMbpf9ykx3XarkeQ5gpnKx3qR+A8peia",
+      "gCbu469WjJDvffROgmiBc/hUuys+18fAgJ1QYKRtY2uTcZksHxMKgxd4++mfKs6a",
+      "gM6a+GaehJw1TwNWc0Z4OcLu6Q6npVOu3vT/me2X49EBbPUgCC3w6gOPQbmtKw0T",
+      "PNV72PMjhotDgbxeo3UVkxHdzw6G8lgkT8WyCdOI53UiLJ08CcYJvOj9n8pfXPRA",
+      "ml0e9U+902ApBhd1+g3gWmtW6mGkvzl8LdEgci5utrdkE+JuS3u04X6wRrL56cpF",
+      "afPARAm00qU5YXYtPHMetDvmCkeI5YfUnQ2ZN2kCAwEAAaNTMFEwHQYDVR0OBBYE",
+      "FJIxmd/oPUj3OlGx3AUDY/g40Fr2MB8GA1UdIwQYMBaAFJIxmd/oPUj3OlGx3AUD",
+      "Y/g40Fr2MA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQENBQADggEBAAjfssIc",
+      "DOEu1NrRsLmeovgjO58EjNbGtRl2+mvR7A4hwshplmyRylAYq0a+pPMcB4ytHbb/",
+      "IfgSJAft+i4dgueeHnYzh0rhY4paFI+hVPaN8PvxDVHIF8d+5XYx7W8SHv5m4c63",
+      "R4jN8Jj05rF+WXj6PyxUibElYBJzV72Rk8bYYBCLjuQE3Vn1sZ/XaovGjIlFVPCh",
+      "gydhCLzIueGIJYXMUJEQcBEHr7oFvGoQtqWEpEIEx1JmfOZBsYibR5wYyS4FWRda",
+      "DjvxJeNCjd5Vn7qhQkZB1Pp2d9GW32q1WeUo7hVxXokp/SCaFiOoSFxaPfe1yk1l",
+      "3gj8hLhe3UDlC08=",
+      "-----END CERTIFICATE-----"
+    ].join("\n");
+    var QZ_PRIVATE_KEY_PEM = [
+      "-----BEGIN PRIVATE KEY-----",
+      "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCMhIgzhLCIuYSk",
+      "5wzG6X/cpMd12q5HkOYKZysd6kfgPKXomoAm7uOvVoyQ7330ToJogXP4VLsrPtfH",
+      "wICdUGCkbWNrk3GZLB8TCoMXePvpnyrOmoDOmvhmnoScNU8DVnNGeDnC7ukOp6VT",
+      "rt70/5ntl+PRAWz1IAgt8OoDj0G5rSsNEzzVe9jzI4aLQ4G8XqN1FZMR3c8OhvJY",
+      "JE/FsgnTiOd1IiydPAnGCbzo/Z/KX1z0QJpdHvVPvdNgKQYXdfoN4FprVuphpL85",
+      "fC3RIHIubra3ZBPibkt7tOF+sEay+enKRWnzwEQJtNKlOWF2LTxzHrQ75gpHiOWH",
+      "1J0NmTdpAgMBAAECggEABLAJKsE2JTsdiZjE0tmISlaO6hR9AUzJEWpgRFodj4WT",
+      "Oh+Pv3zAFYg+hGx3S1A9+ay6SMie1wvJWNPhsB3PbSM4qiaPJ0wTAoIa96X+e8xm",
+      "oHs3NjoL2ye8bPxt4dxSi44umYOtCUmepZxThy3Q6ndJaNGlp/nFFa9DR0VSRnzl",
+      "QO8tCtSNnj6NecmWYpng8iDxp/IwCJJ13+kyo5PcV6iAyT9+KFOS4oK/q5iC/3i/",
+      "zunjaIlHb9Krz8PBgi4ic0xZJsG6q4iUctA4A0Pl+JMGJWagI2uRKzoV9zwG/mGy",
+      "eVKW1IVOvuo27IovYrsxAsM4CmLe9ek/tH+jmFckrwKBgQC/r22UGqbAduRmPSWK",
+      "CajkUfVySrAg72iNOmaghbfnPBz/SZTe8RK1rLn6R2sVHCj2/r3lTwinvWV/1CuM",
+      "NeY2LpbPaTR7XzNWaNUuAZ3Xnhfd/Juxc5Kn+B9+HIQlMhLn/T7G2Nma+O2p2xGo",
+      "t2lVbZ1+7JUtGkcOUZTELSZTrwKBgQC7qiDv6Oiw+cAFBJBM2WzQ1D3EGapK79xc",
+      "YmhLbmGJlYfvCZj3F4IqXmpyrMrCOzXKr8U/nqm/2qAfpakjJW9rppFTqHGV0YcJ",
+      "4IKyivx1P+KnLEu8D+4hA8g1FSZI3nvoTrXlPOl8fFUVPZKN3SdMLvC9IAtOLGa8",
+      "FnEb3jI0ZwKBgHY42DiUB2yE53E3HUP5mTTYZ61J6z8k6TLRZiJy1m3DYY8B7tNh",
+      "k8yA72MxURX//DP6AVzAVfI+ma8xSHp9c7LPISxjEn9Uw/DzTyfEz3kAhG/hMJVN",
+      "VpJKMgIxzD60l3yFcIZrkCpIhSxRdJ6+IDUUGiMB/y+GGXT3U+16ezz5AoGBAICz",
+      "Fy2Q7Gvai96lF5Usk1zQAaAH/eqwfs54yo/Ynlmty/CaA2aJn8IQyC3m5JK56pUb",
+      "YEnWNRIXDDNH+CvbU4NfU1EtNuCJNnQGnXt2p9Z9PqJpVXMe9a98mYQWAhB9TDqw",
+      "KDyTPokZ93u+o1BZN8cedgkt/bLZ7obVWTLEemfHAoGAb6hkGtUp0DjxW3DAtxRn",
+      "HXxgmZlnTx2Zv5gcDjk2Xo1M2AMs5AB1mCXt7R+bACofPNmMfwyva13KhVoD8ZrY",
+      "VBj4OcuaMbqNLccFqGlFc5LN2pacR4txabvfrtkpRYVitsBgA19yp7Rn4Qcuebol",
+      "AS1VeLzHSeuEiPQRFsmxoOE=",
+      "-----END PRIVATE KEY-----"
+    ].join("\n");
+
+    function _pemToArrayBuffer(pem) {
+      var b64 = pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
+      var raw = atob(b64);
+      var buf = new Uint8Array(raw.length);
+      for (var i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
+      return buf.buffer;
+    }
+    var _qzSignKeyPromise = null;
+    function _getQzSignKey() {
+      if (!_qzSignKeyPromise) {
+        if (!window.crypto || !window.crypto.subtle) {
+          _qzSignKeyPromise = Promise.reject(new Error("WebCrypto unavailable — QZ signing needs HTTPS or localhost"));
+        } else {
+          _qzSignKeyPromise = window.crypto.subtle.importKey(
+            "pkcs8", _pemToArrayBuffer(QZ_PRIVATE_KEY_PEM),
+            { name: "RSASSA-PKCS1-v1_5", hash: "SHA-512" }, false, ["sign"]
+          );
+        }
+      }
+      return _qzSignKeyPromise;
+    }
+    var _qzSecurityInstalled = false;
+    function installQzSecurity() {
+      if (_qzSecurityInstalled || typeof qz === "undefined") return;
+      _qzSecurityInstalled = true;
+      qz.security.setCertificatePromise(function (resolve) { resolve(QZ_CERT_PEM); });
+      qz.security.setSignatureAlgorithm("SHA512");
+      qz.security.setSignaturePromise(function (toSign) {
+        return function (resolve, reject) {
+          _getQzSignKey().then(function (key) {
+            var data = new TextEncoder().encode(toSign);
+            return window.crypto.subtle.sign({ name: "RSASSA-PKCS1-v1_5" }, key, data);
+          }).then(function (sig) {
+            var bytes = new Uint8Array(sig);
+            var str = "";
+            for (var i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
+            resolve(btoa(str));
+          }).catch(function (err) {
+            console.warn("QZ sign failed, falling back to unsigned:", err);
+            resolve("");
+          });
+        };
+      });
+    }
+
     // ── Connect to QZ Tray ──────────────────────────────────
     function connect() {
       if (typeof qz === "undefined") {
@@ -5181,12 +5379,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         return Promise.reject("qz not loaded");
       }
 
-      // Certificate / signature — for dev/LAN use, disable security
-      qz.security.setCertificatePromise(function (resolve) { resolve(""); });
-      qz.security.setSignatureAlgorithm("SHA512");
-      qz.security.setSignaturePromise(function (toSign) {
-        return function (resolve) { resolve(""); };
-      });
+      installQzSecurity();
 
       if (qz.websocket.isActive()) return Promise.resolve();
 
@@ -5204,6 +5397,14 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var b = order && order.branch;
       if (b && PRINTER_MAP[b]) return PRINTER_MAP[b];
       return PRINTER_NAME || "";
+    }
+    // Kitchen printer resolver — per-branch override falls back to the global
+    // kitchen printer. Returns "" when no kitchen printer is configured for
+    // this order, which suppresses the kitchen ticket for that branch.
+    function kitchenPrinterFor(order) {
+      var b = order && order.branch;
+      if (b && KITCHEN_PRINTER_MAP[b]) return KITCHEN_PRINTER_MAP[b];
+      return KITCHEN_PRINTER_NAME || "";
     }
 
     // ── Invoice config ──────────────────────────────────────
@@ -5298,9 +5499,14 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       italicPromo: false
     };
     var INVOICE_CFG = { global: {}, byBranch: {} };
-    function resolveConfig(branchId) {
-      var g = Object.assign({}, INVOICE_DEFAULTS, INVOICE_CFG.global || {});
-      var b = (INVOICE_CFG.byBranch && INVOICE_CFG.byBranch[branchId]) || {};
+    // resolveConfig(branchId [, cfgOverride])
+    //   cfgOverride — optional { global, byBranch } used by the live-preview
+    //   pane so the admin sees pending edits before Save. When omitted the
+    //   saved INVOICE_CFG is used, matching the real print pipeline.
+    function resolveConfig(branchId, cfgOverride) {
+      var src = cfgOverride && (cfgOverride.global || cfgOverride.byBranch) ? cfgOverride : INVOICE_CFG;
+      var g = Object.assign({}, INVOICE_DEFAULTS, src.global || {});
+      var b = (src.byBranch && src.byBranch[branchId]) || {};
       return Object.assign({}, g, b);
     }
     function setInvoiceConfig(newCfg) {
@@ -5358,8 +5564,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     }
 
     // ── Build ESC/POS receipt ───────────────────────────────
-    function buildReceipt(order) {
-      var C = resolveConfig(order.branch);
+    function buildReceipt(order, cfgOverride) {
+      var C = resolveConfig(order.branch, cfgOverride);
       var ESC  = "\x1B";
       var GS   = "\x1D";
       var LF   = "\n";
@@ -5641,6 +5847,128 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       return lines.join("");
     }
 
+    // ── Build ESC/POS KITCHEN ticket ─────────────────────────
+    // Minimal pass-line ticket the line cook actually needs: order #, when
+    // it landed, order type, and every item with its quantity + note.
+    // Nothing else — no prices, no loyalty, no QR. Uses the same paper
+    // width + auto-cut settings as the customer receipt so the same paper
+    // roll works, but has its own printer target (kitchenPrinterFor).
+    function buildKitchenReceipt(order, cfgOverride) {
+      var C = resolveConfig(order.branch, cfgOverride);
+      var ESC = "\x1B", GS = "\x1D", LF = "\n";
+      var BOLD_ON = ESC + "E\x01", BOLD_OFF = ESC + "E\x00";
+      var CENTER = ESC + "a\x01", LEFT = ESC + "a\x00";
+      var NORMAL = GS + "!\x00", TALL = GS + "!\x10", BIG = GS + "!\x11", HUGE = GS + "!\x22";
+      var CUT = GS + "V\x42\x00";
+      var W = Math.max(24, Math.min(64, Number(C.paperWidth) || 32));
+      function line(ch) { return ch.repeat(W) + LF; }
+      function pad(l, r) { var g = W - l.length - r.length; if (g < 1) g = 1; return l + " ".repeat(g) + r; }
+
+      var orderTs = null;
+      if (order.createdAt && typeof order.createdAt.toDate === "function") orderTs = order.createdAt.toDate();
+      else if (order.date) { var t = new Date(order.date); if (!isNaN(t.getTime())) orderTs = t; }
+      if (!orderTs) orderTs = new Date();
+      var timeStr = orderTs.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      var dateStr = orderTs.toLocaleDateString("en-GB");
+
+      var branchMap = { kakkiyah: "Kakkiyah", subhani: "Subhani", waliy: "Waliy Al Ahd" };
+      var branchName = branchMap[order.branch] || (order.branchObj && (order.branchObj.nameEn || order.branchObj.id)) || order.branch || "";
+
+      var out = [];
+      out.push(NORMAL);
+      out.push(CENTER + BOLD_ON + TALL + "KITCHEN" + NORMAL + BOLD_OFF + LF);
+      if (branchName) out.push(CENTER + stripEmoji(branchName) + LF);
+      out.push(LEFT + line("="));
+      // Order number — biggest thing on the ticket so the cook can read it
+      // from across the pass without picking up the paper.
+      out.push(CENTER + HUGE + BOLD_ON + "#" + stripEmoji(order.orderNo || "") + BOLD_OFF + NORMAL + LF);
+      out.push(LEFT + line("-"));
+      out.push(BOLD_ON + "Type: " + BOLD_OFF + (order.orderType === "pickup" ? "Pickup" : "Delivery") + LF);
+      out.push(BOLD_ON + "Placed: " + BOLD_OFF + dateStr + " " + timeStr + LF);
+      var prepMin = order.orderType === "delivery"
+        ? Number(C.prepMinutesDelivery) || 30
+        : Number(C.prepMinutesPickup) || 15;
+      var readyStr = new Date(orderTs.getTime() + prepMin * 60000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      out.push(BOLD_ON + "Ready: " + BOLD_OFF + readyStr + " (~" + prepMin + " min)" + LF);
+      out.push(LEFT + line("="));
+
+      // Items — name in BIG on its own line, qty on the right in HUGE so
+      // the cook can count at a glance. Note (if any) below in normal.
+      (order.items || []).forEach(function (item) {
+        var name = stripEmoji(item.name || "");
+        var qty = "x" + (item.qty || 1);
+        out.push(BIG + BOLD_ON + name + BOLD_OFF + NORMAL + LF);
+        out.push(pad("", HUGE + BOLD_ON + qty + BOLD_OFF + NORMAL) + LF);
+        if (item.note) out.push("  >> " + stripEmoji(item.note) + LF);
+        out.push(LEFT + line("-"));
+      });
+
+      // Order-wide note (e.g. "extra sauce for everything")
+      if (order.note) {
+        out.push(BOLD_ON + "NOTE: " + BOLD_OFF + stripEmoji(order.note) + LF);
+        out.push(LEFT + line("-"));
+      }
+
+      var feed = Math.max(1, Number(C.feedLines) || 3);
+      out.push(LF.repeat(feed));
+      if (C.autoCut !== false) out.push(CUT);
+      return out.join("");
+    }
+
+    // ── Build KITCHEN HTML (for live preview + browser fallback) ─
+    function buildKitchenReceiptHTML(order, cfgOverride) {
+      var C = resolveConfig(order.branch, cfgOverride);
+      var branchMap = { kakkiyah: "Kakkiyah", subhani: "Subhani", waliy: "Waliy Al Ahd" };
+      var branchName = branchMap[order.branch] || (order.branchObj && (order.branchObj.nameEn || order.branchObj.id)) || order.branch || "";
+      var d = null;
+      if (order.createdAt && typeof order.createdAt.toDate === "function") d = order.createdAt.toDate();
+      else if (order.date) { var _t = new Date(order.date); if (!isNaN(_t.getTime())) d = _t; }
+      if (!d) d = new Date();
+      var when = d.toLocaleDateString("en-GB") + " " + d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      var prepMin = order.orderType === "delivery" ? Number(C.prepMinutesDelivery) || 30 : Number(C.prepMinutesPickup) || 15;
+      var readyBy = new Date(d.getTime() + prepMin * 60000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      var basePx = Math.max(11, Math.min(30, Number(C.fontHtmlPx) || 15));
+      function esc(s){ return stripEmoji(String(s == null ? "" : s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+      var items = (order.items || []).map(function (it) {
+        var noteHTML = it.note ? "<div style='font-size:" + Math.round(basePx*0.9) + "px'>&gt;&gt; " + esc(it.note) + "</div>" : "";
+        return "<div class='item'>" +
+          "<div class='iname'>" + esc(it.name || "") + "</div>" +
+          "<div class='iqty'>x" + (it.qty || 1) + "</div>" +
+          noteHTML +
+          "</div>";
+      }).join("");
+
+      return "<!doctype html><html><head><meta charset='utf-8'/><title>Kitchen #" + esc(order.orderNo) + "</title>" +
+        "<style>" +
+        "@page{size:72mm auto;margin:0}" +
+        "html,body{margin:0;padding:0;background:#fff;color:#000;font-family:'VT323','Courier Prime','Courier New','Consolas',monospace;font-size:" + basePx + "px;line-height:1.15;width:72mm;font-weight:700;-webkit-font-smoothing:none;font-smooth:never}" +
+        ".r{padding:6mm 4mm}" +
+        ".c{text-align:center}" +
+        "hr{border:none;border-top:1px dashed #000;margin:5px 0}.dbl{border-top:2px solid #000}" +
+        ".big{font-size:" + Math.round(basePx * 1.6) + "px;font-weight:900}" +
+        ".huge{font-size:" + Math.round(basePx * 2.4) + "px;font-weight:900;letter-spacing:1px}" +
+        ".row{display:flex;justify-content:space-between;align-items:baseline}" +
+        ".item{padding:6px 0;border-bottom:1px dashed #000}" +
+        ".iname{font-size:" + Math.round(basePx * 1.4) + "px;font-weight:900}" +
+        ".iqty{font-size:" + Math.round(basePx * 2) + "px;font-weight:900;text-align:right}" +
+        ".pagecut{page-break-after:always}" +
+        "</style></head><body><div class='r'>" +
+          "<div class='c big'>KITCHEN</div>" +
+          (branchName ? "<div class='c'>" + esc(branchName) + "</div>" : "") +
+          "<hr class='dbl'/>" +
+          "<div class='c huge'>#" + esc(order.orderNo || "") + "</div>" +
+          "<hr/>" +
+          "<div class='row'><span>Type</span><span>" + esc(order.orderType === "pickup" ? "Pickup" : "Delivery") + "</span></div>" +
+          "<div class='row'><span>Placed</span><span>" + esc(when) + "</span></div>" +
+          "<div class='row'><span>Ready</span><span>" + esc(readyBy) + " (~" + prepMin + " min)</span></div>" +
+          "<hr class='dbl'/>" +
+          items +
+          (order.note ? "<div style='margin-top:6px'><b>NOTE:</b> " + esc(order.note) + "</div>" : "") +
+          "<div style='height:" + (Math.max(1, Number(C.feedLines) || 3) * 4) + "mm'></div>" +
+        "</div><div class='pagecut'></div></body></html>";
+    }
+
     // ── QR → SVG (for HTML fallback path) ───────────────────
     // The thermal ESC/POS path lets the printer's firmware raster the QR;
     // the Windows-driver fallback goes through the browser's print pipeline,
@@ -5662,8 +5990,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     // Same data as thermal path, laid out at ~80mm width. The Windows
     // thermal-printer driver handles the paper cut once "auto-cut after job"
     // is on in its Preferences pane (standard EPSON/Xprinter/Bixolon default).
-    function buildReceiptHTML(order) {
-      var C = resolveConfig(order.branch);
+    function buildReceiptHTML(order, cfgOverride) {
+      var C = resolveConfig(order.branch, cfgOverride);
       var branchMap = { kakkiyah: "Kakkiyah", subhani: "Subhani", waliy: "Waliy Al Ahd" };
       var branchName = branchMap[order.branch] || (order.branchObj && (order.branchObj.nameEn || order.branchObj.id)) || order.branch || "";
       var branchPhone = (order.branchObj && order.branchObj.phone) || "";
@@ -5871,26 +6199,46 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
 
     // ── Send to printer ─────────────────────────────────────
     // Uses ESC/POS raw mode, which QZ Tray sends silently (no OS print dialog).
-    function _doPrint(order) {
-      var target = printerFor(order);
-      return Promise.all([qz.printers.find(target), enrichOrder(order)]).then(function (arr) {
-        var printer = arr[0];
-        var enriched = arr[1];
+    // Two independent jobs — customer receipt on the counter printer and
+    // (if configured) a kitchen ticket on the kitchen printer. Both dispatch
+    // in parallel; a missing/blank kitchen printer just skips its ticket.
+    function _sendRaw(target, payload) {
+      return qz.printers.find(target).then(function (printer) {
         var actualPrinter = Array.isArray(printer) ? printer[0] : printer;
         if (!actualPrinter) throw new Error("Printer not found: " + target);
-
-        // Silent raw print — no dialog, direct ESC/POS bytes to the thermal head.
         var config = qz.configs.create(actualPrinter, {
           copies: COPIES,
           rasterize: false,
           altPrinting: false
         });
-        var data = [{
-          type: "raw",
-          format: "plain",
-          data: buildReceipt(enriched)
-        }];
-        return qz.print(config, data);
+        return qz.print(config, [{ type: "raw", format: "plain", data: payload }]);
+      });
+    }
+    function _doPrint(order) {
+      var customerTarget = printerFor(order);
+      var kitchenTarget = kitchenPrinterFor(order);
+      return enrichOrder(order).then(function (enriched) {
+        var jobs = [];
+        // Customer receipt (unchanged content)
+        if (customerTarget) {
+          jobs.push(_sendRaw(customerTarget, buildReceipt(enriched)).catch(function (e) {
+            console.warn("Customer receipt failed on " + customerTarget + ":", e && (e.message || e));
+            throw e;
+          }));
+        }
+        // Kitchen ticket — only when a kitchen printer is configured for
+        // this branch (or globally). Silent skip otherwise so branches that
+        // print at the counter aren't forced to configure a kitchen printer.
+        if (kitchenTarget) {
+          jobs.push(_sendRaw(kitchenTarget, buildKitchenReceipt(enriched)).catch(function (e) {
+            // A missing kitchen printer must not stop the customer receipt
+            // from being counted as printed. Log + swallow.
+            console.warn("Kitchen ticket failed on " + kitchenTarget + ":", e && (e.message || e));
+            logPrint({ ok: false, orderNo: enriched.orderNo, fbId: enriched.fbId, printer: kitchenTarget, via: "qz-kitchen", msg: (e && (e.message || e.code)) || String(e) });
+          }));
+        }
+        if (!jobs.length) throw new Error("No printer configured");
+        return Promise.all(jobs);
       });
     }
     // Phase 8 hardening:
@@ -5935,17 +6283,18 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
 
       return attemptQz().catch(function (finalErr) {
         var msg = (finalErr && (finalErr.message || finalErr.code)) || String(finalErr);
-        console.warn("QZ exhausted after " + attempt + " attempts, falling back to Windows print:", msg);
-        showStatus("🖨️ Using Windows printer #" + order.orderNo, "warn");
-        return browserPrint(order).then(function () {
-          showStatus("✅ Printed via Windows #" + order.orderNo, "ok");
-          logPrint({ ok: true, fallback: true, orderNo: order.orderNo, fbId: order.fbId, printer: printerFor(order), via: "browser", attempts: attempt, reason: msg });
-        }).catch(function (bpErr) {
-          var bpMsg = (bpErr && (bpErr.message || bpErr.code)) || String(bpErr);
-          showStatus("❌ Print failed #" + order.orderNo, "error");
-          logPrint({ ok: false, orderNo: order.orderNo, fbId: order.fbId, printer: printerFor(order), via: "browser", attempts: attempt, msg: "browser: " + bpMsg + " (qz: " + msg + ")" });
-          throw bpErr;
-        });
+        // Deliberate no-fallback path — the user asked for direct silent
+        // printing only. The old Windows-print fallback opened the OS print
+        // dialog, which is exactly what they wanted killed. If QZ can't
+        // print (offline, blocked, no printer), we log + show a status and
+        // let the operator hit Reprint once the printer is back.
+        console.warn("QZ exhausted after " + attempt + " attempts:", msg);
+        showStatus("❌ Print failed #" + order.orderNo + " — check QZ Tray", "error");
+        logPrint({ ok: false, orderNo: order.orderNo, fbId: order.fbId, printer: printerFor(order), via: "qz", attempts: attempt, msg: msg });
+        // Free the dedup slot so a manual Reprint can retry from scratch
+        // once the printer/QZ Tray is back.
+        PRINTED_IDS.delete(key); saveDedup();
+        throw finalErr;
       });
     }
 
@@ -6126,11 +6475,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       setTimeout(function () {
         if (typeof qz === "undefined") { updateBar("offline", ""); return; }
 
-        qz.security.setCertificatePromise(function (resolve) { resolve(""); });
-        qz.security.setSignatureAlgorithm("SHA512");
-        qz.security.setSignaturePromise(function (toSign) {
-          return function (resolve) { resolve(""); };
-        });
+        installQzSecurity();
 
         var doConnect = function () {
           if (qz.websocket.isActive()) {
@@ -6205,10 +6550,20 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         if (name) PRINTER_MAP[branch] = name; else delete PRINTER_MAP[branch];
         saveCfg();
       },
+      setKitchenPrinterName: function (n) { KITCHEN_PRINTER_NAME = n || ""; saveCfg(); },
+      setKitchenBranchPrinter: function (branch, name) {
+        if (!branch) return;
+        if (name) KITCHEN_PRINTER_MAP[branch] = name; else delete KITCHEN_PRINTER_MAP[branch];
+        saveCfg();
+      },
       setCopies: function (n) { COPIES = Math.max(1, parseInt(n,10)||1); saveCfg(); },
       setBranchFilter: function (b) { BRANCH_FILTER = b; console.log("🖨️ Print filter set to branch: " + b); },
       getStatus: function () { return qz && qz.websocket.isActive(); },
-      getConfig: function () { return { printerName: PRINTER_NAME, copies: COPIES, autoPrint: AUTO_PRINT, printerMap: Object.assign({}, PRINTER_MAP) }; },
+      getConfig: function () { return { printerName: PRINTER_NAME, copies: COPIES, autoPrint: AUTO_PRINT, printerMap: Object.assign({}, PRINTER_MAP), kitchenPrinterName: KITCHEN_PRINTER_NAME, kitchenPrinterMap: Object.assign({}, KITCHEN_PRINTER_MAP) }; },
+      // Live-preview helpers — return HTML the InvoiceSetup pane renders
+      // in an iframe so the admin sees pending edits before Save.
+      renderCustomerHTML: function (order, cfgOverride) { return buildReceiptHTML(order || {}, cfgOverride); },
+      renderKitchenHTML:  function (order, cfgOverride) { return buildKitchenReceiptHTML(order || {}, cfgOverride); },
       // Pre-claim a dedup key so the Firestore listener's auto-print hook
       // won't race with an explicit Accept-triggered print. Persistent.
       markPrinted: function (order) { if (order) { PRINTED_IDS.add(_dedupKey(order)); saveDedup(); } },
