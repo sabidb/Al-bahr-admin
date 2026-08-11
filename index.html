@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.26.0";
+const APP_VERSION = "8.26.1";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -4340,6 +4340,10 @@ function App() {
               userName: o.userName || "Customer",
               userPhone: o.userPhone || "",
               userUid: o.userUid || "",
+              // Phase 2 orders record the authenticated uid as customerUid
+              // (submitOrder callable). Older rows may carry userUid instead —
+              // enrichOrder reads whichever is present.
+              customerUid: o.customerUid || o.userUid || "",
               items: o.items || [],
               total: (typeof t.total === "number" ? t.total : o.total) || 0,
               subtotal: (typeof t.subtotal === "number" ? t.subtotal : o.subtotal) || 0,
@@ -5085,6 +5089,26 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
                        : msg;
             return { ok: false, error: pretty };
           }
+        },
+        // Canonical loyalty snapshot — reads customers/{uid} directly. This
+        // is the ledger-mirrored `points` field so the number always reflects
+        // every earn AND every redemption (Phase 12). Preferred over the
+        // phone-based sum path, which cannot know which of several customer
+        // docs (repeat-anonymous-signup) owns the redemption debit.
+        getCustomerLoyalty: async function(customerUid){
+          try {
+            if (!customerUid) return null;
+            var s = await getDoc(doc(_db, "customers", String(customerUid)));
+            if (!s.exists()) return null;
+            var d = s.data() || {};
+            var n = Number((d.points != null ? d.points : d.loyaltyPoints) || 0);
+            return {
+              balance: n,
+              tierMult: Number(d.tierMult) || 1,
+              tierName: d.tierName || "",
+              tierEmoji: d.tierEmoji || ""
+            };
+          } catch(_) { return null; }
         },
         // Live subscription to a single customer doc — the panel calls this
         // on mount so name/points/notes/tier update in real time across
@@ -6016,9 +6040,22 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         // ticket to open the right customer, and so a future in-store kiosk
         // can credit or redeem against the correct account. Prints on every
         // receipt that has a phone, independently of the reward/coupon QR.
-        if (order.userPhone) {
-          lines.push(CENTER + escposQR("cust:" + String(order.userPhone), Math.max(1, QR_SIZE - 2), 50) + LF);
-          lines.push(CENTER + stripEmoji(order.userPhone) + LF);
+        // Phase 11: the QR carries an OPAQUE token, never a discount value
+        // or the raw phone number. We prefer the customer's uid — a stable
+        // Firestore-generated random ID that lets a scanner (admin app or
+        // in-store kiosk) look up the account without exposing PII on the
+        // paper. Falls back to phone only if the order didn't record a uid
+        // (legacy anonymous checkouts).
+        var custToken = String(order.customerUid || order.userUid || order.uid || "");
+        var qrPayload = custToken ? ("cust:" + custToken)
+                      : order.userPhone ? ("cust:" + String(order.userPhone))
+                      : "";
+        if (qrPayload) {
+          lines.push(CENTER + escposQR(qrPayload, Math.max(1, QR_SIZE - 2), 50) + LF);
+          // Below the QR: show the phone in cleartext for humans, since the
+          // opaque token isn't useful to a cashier reading the paper. The
+          // QR itself is scanner-only.
+          if (order.userPhone) lines.push(CENTER + stripEmoji(order.userPhone) + LF);
         }
         lines.push(LEFT + line("-"));
       }
@@ -6284,12 +6321,17 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       // the order carries a phone, so the counter can scan the ticket to
       // pull up the correct account.
       var custQrHTML = "";
-      if (order.userPhone) {
-        var custSvg = qrSVG("cust:" + String(order.userPhone), 160);
+      // Phase 11 opaque QR — uid preferred, phone fallback for legacy rows.
+      var _custToken = String(order.customerUid || order.userUid || order.uid || "");
+      var _qrPayload = _custToken ? ("cust:" + _custToken)
+                    : order.userPhone ? ("cust:" + String(order.userPhone))
+                    : "";
+      if (_qrPayload) {
+        var custSvg = qrSVG(_qrPayload, 160);
         if (custSvg) {
           var custWidth = Math.max(20, qrWidthMm - 8);
           custQrHTML = "<div class='c qrbox' style='width:" + custWidth + "mm'>" + custSvg + "</div>" +
-                       "<div class='c' style='font-size:" + Math.round(basePx*0.85) + "px'>" + esc(order.userPhone) + "</div>";
+                       (order.userPhone ? "<div class='c' style='font-size:" + Math.round(basePx*0.85) + "px'>" + esc(order.userPhone) + "</div>" : "");
         }
       }
 
@@ -6384,22 +6426,21 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     }
 
     // Fetches the customer's running loyalty balance so it prints on the
-    // ticket. Best-effort — a lookup failure just skips that line. Also
-    // caches the branch snapshot's phone if the order didn't embed one.
+    // ticket. Best-effort — a lookup failure just skips that line.
+    //
+    // Priority order (Phase 12 correctness):
+    //   1. customers/{customerUid}.points — the ledger-mirrored balance.
+    //      This is the ONLY source that reflects redemption debits, since
+    //      the server-side ledger writes both the delta AND the mirrored
+    //      balance in one transaction.
+    //   2. Phone-based sum across every customer doc sharing the phone —
+    //      last-resort so anonymous-signup users still show something.
     function enrichOrder(order) {
       var enriched = Object.assign({}, order);
-      if (!window.FB || !order.userPhone) return Promise.resolve(enriched);
-      var fn = window.FB.getLoyaltySnapshotByPhone;
-      if (typeof fn !== "function") {
-        // Legacy path — single doc, single field. Kept so an old cached
-        // fb.js still shows *something* rather than nothing.
-        if (!window.FB.getCustomerByPhone) return Promise.resolve(enriched);
-        return window.FB.getCustomerByPhone(order.userPhone).then(function (c) {
-          if (c && c.loyaltyPoints != null) enriched.loyaltyBalance = Number(c.loyaltyPoints) || 0;
-          return enriched;
-        }).catch(function () { return enriched; });
-      }
-      return fn(order.userPhone).then(function (snap) {
+      if (!window.FB) return Promise.resolve(enriched);
+
+      var uid = order && (order.customerUid || order.userUid || order.uid);
+      var applySnap = function (snap) {
         if (snap) {
           enriched.loyaltyBalance = Number(snap.balance) || 0;
           enriched.loyaltyTierMult = Number(snap.tierMult) || 1;
@@ -6407,7 +6448,28 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
           if (snap.tierEmoji) enriched.loyaltyTierEmoji = snap.tierEmoji;
         }
         return enriched;
-      }).catch(function () { return enriched; });
+      };
+
+      if (uid && typeof window.FB.getCustomerLoyalty === "function") {
+        return window.FB.getCustomerLoyalty(uid).then(applySnap).catch(function () {
+          // Fall through to the phone path if the uid read fails.
+          return byPhoneFallback();
+        });
+      }
+      return byPhoneFallback();
+
+      function byPhoneFallback() {
+        if (!order.userPhone) return Promise.resolve(enriched);
+        var fn = window.FB.getLoyaltySnapshotByPhone;
+        if (typeof fn !== "function") {
+          if (!window.FB.getCustomerByPhone) return Promise.resolve(enriched);
+          return window.FB.getCustomerByPhone(order.userPhone).then(function (c) {
+            if (c && c.loyaltyPoints != null) enriched.loyaltyBalance = Number(c.loyaltyPoints) || 0;
+            return enriched;
+          }).catch(function () { return enriched; });
+        }
+        return fn(order.userPhone).then(applySnap).catch(function () { return enriched; });
+      }
     }
 
     // ── Send to printer ─────────────────────────────────────
