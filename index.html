@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.26.1";
+const APP_VERSION = "8.27.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -658,6 +658,490 @@ function MenuTabNew({ menu, setMenu, isOwner, branches, branchScope }) {
             );
           })
         )
+      )
+    )
+  );
+}
+
+// ── MARKETING TAB (Phase 16 — Campaigns + Segments) ───────────────────
+// Owner-only. Two sub-sections:
+//   Campaigns — reward programmes with budget, dates, branches, segment.
+//   Segments  — reusable audiences (filter rules + include/exclude uids).
+// All writes flow through owner-gated Cloud Functions; live reads use
+// onSnapshot on the settings/campaigns and settings/segments collections
+// so a change on one device paints on every open device instantly.
+function MarketingTab({ branches }) {
+  const [sub, setSub] = React.useState("campaigns");
+  const [segments, setSegments] = React.useState([]);
+  const [campaigns, setCampaigns] = React.useState([]);
+
+  React.useEffect(() => {
+    if (!window.FB || !window.FB.onSegmentsChange) return;
+    const u = window.FB.onSegmentsChange(setSegments);
+    return () => { try { u(); } catch(_){} };
+  }, []);
+  React.useEffect(() => {
+    if (!window.FB || !window.FB.onCampaignsChange) return;
+    const u = window.FB.onCampaignsChange(setCampaigns);
+    return () => { try { u(); } catch(_){} };
+  }, []);
+
+  const pill = (id, label) => React.createElement("button", {
+    key: id, onClick: () => setSub(id),
+    style: { padding: "9px 18px", borderRadius: 999, border: "1.5px solid " + (sub === id ? "#E10600" : "#EAECF2"), background: sub === id ? "#FFF1F2" : "#fff", color: sub === id ? "#E10600" : "#6B7280", fontSize: 13, fontWeight: 700, cursor: "pointer" }
+  }, label);
+
+  return React.createElement("div", { style: { paddingBottom: 100 } },
+    React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 16, overflowX: "auto", paddingBottom: 4 } },
+      pill("campaigns", "📣 Campaigns"),
+      pill("segments", "🎯 Segments")
+    ),
+    sub === "campaigns" && React.createElement(CampaignsManager, { campaigns: campaigns, segments: segments, branches: branches }),
+    sub === "segments"  && React.createElement(SegmentsManager,  { segments: segments })
+  );
+}
+
+// ── Segments manager ────────────────────────────────────────────────
+function SegmentsManager({ segments }) {
+  const [editing, setEditing] = React.useState(null); // segment object or null
+  const [saving, setSaving] = React.useState(false);
+
+  const startNew = () => setEditing({ id: "", name: "", description: "", rules: {}, includeUids: [], excludeUids: [] });
+  const edit = (s) => setEditing(Object.assign({ rules: {}, includeUids: [], excludeUids: [] }, s));
+  const del = async (s) => {
+    if (!window.confirm("Delete segment \"" + s.name + "\"? Campaigns referencing it will keep working but skip the audience filter.")) return;
+    await window.FB.deleteSegment(s.id);
+  };
+
+  return React.createElement("div", null,
+    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
+      React.createElement("div", { style: { fontSize: 12, color: "#6B7280", fontWeight: 600 } }, (segments || []).length + " segment(s)"),
+      React.createElement("button", { onClick: startNew, className: "btn-primary", style: { padding: "9px 14px", fontSize: 13 } }, "＋ New segment")
+    ),
+    (segments || []).length === 0 && React.createElement("div", { className: "card", style: { padding: 20, textAlign: "center", color: "#9CA3AF", fontSize: 13 } }, "No segments yet — create one to reuse as an audience across campaigns."),
+    (segments || []).map(s => React.createElement("div", { key: s.id, className: "card", style: { padding: 14, marginBottom: 10 } },
+      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 } },
+        React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+          React.createElement("div", { style: { fontWeight: 800, fontSize: 14, color: "#111827" } }, s.name || "(unnamed)"),
+          s.description && React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 2 } }, s.description),
+          React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 } },
+            (s.rules && s.rules.tierIn && s.rules.tierIn.length) ? React.createElement("span", { style: { background: "#FEF3C7", color: "#92400E", padding: "3px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700 } }, "tiers: " + s.rules.tierIn.join(", ")) : null,
+            (s.rules && s.rules.inactiveDays) ? React.createElement("span", { style: { background: "#FEE2E2", color: "#991B1B", padding: "3px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700 } }, "inactive ≥ " + s.rules.inactiveDays + "d") : null,
+            (s.rules && s.rules.activeWithinDays) ? React.createElement("span", { style: { background: "#DCFCE7", color: "#166534", padding: "3px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700 } }, "active < " + s.rules.activeWithinDays + "d") : null,
+            (s.rules && s.rules.minOrders != null) ? React.createElement("span", { style: { background: "#DBEAFE", color: "#1E40AF", padding: "3px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700 } }, "≥" + s.rules.minOrders + " orders") : null,
+            (s.rules && s.rules.minSpend != null) ? React.createElement("span", { style: { background: "#DBEAFE", color: "#1E40AF", padding: "3px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700 } }, "≥SR" + s.rules.minSpend) : null,
+            (s.includeUids && s.includeUids.length) ? React.createElement("span", { style: { background: "#E0E7FF", color: "#3730A3", padding: "3px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700 } }, "+" + s.includeUids.length + " forced-in") : null,
+            (s.excludeUids && s.excludeUids.length) ? React.createElement("span", { style: { background: "#F3F4F6", color: "#374151", padding: "3px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700 } }, "−" + s.excludeUids.length + " excluded") : null
+          )
+        ),
+        React.createElement("div", { style: { display: "flex", gap: 6, flexShrink: 0 } },
+          React.createElement("button", { onClick: () => edit(s), className: "btn-secondary", style: { padding: "6px 10px", fontSize: 12 } }, "✎"),
+          React.createElement("button", { onClick: () => del(s), style: { background: "#FEE2E2", color: "#991B1B", border: "1px solid #FECACA", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" } }, "🗑")
+        )
+      )
+    )),
+    editing && React.createElement(SegmentEditor, { seg: editing, onClose: () => setEditing(null), onSaved: () => setEditing(null), saving: saving, setSaving: setSaving })
+  );
+}
+
+// ── Segment editor modal ────────────────────────────────────────────
+function SegmentEditor({ seg, onClose, onSaved, saving, setSaving }) {
+  const [draft, setDraft] = React.useState(seg);
+  const [preview, setPreview] = React.useState(null);
+  const [previewing, setPreviewing] = React.useState(false);
+  const [uidInput, setUidInput] = React.useState({ include: "", exclude: "" });
+
+  const setRule = (k, v) => setDraft(d => Object.assign({}, d, { rules: Object.assign({}, d.rules || {}, { [k]: v }) }));
+  const clearRule = (k) => setDraft(d => { const r = Object.assign({}, d.rules || {}); delete r[k]; return Object.assign({}, d, { rules: r }); });
+
+  const addUid = (kind) => {
+    const v = String(uidInput[kind] || "").trim();
+    if (!v) return;
+    setDraft(d => {
+      const key = kind === "include" ? "includeUids" : "excludeUids";
+      const arr = Array.isArray(d[key]) ? d[key].slice() : [];
+      if (arr.indexOf(v) < 0) arr.push(v);
+      return Object.assign({}, d, { [key]: arr });
+    });
+    setUidInput(u => Object.assign({}, u, { [kind]: "" }));
+  };
+  const removeUid = (kind, uid) => setDraft(d => {
+    const key = kind === "include" ? "includeUids" : "excludeUids";
+    return Object.assign({}, d, { [key]: (d[key] || []).filter(x => x !== uid) });
+  });
+
+  const doPreview = async () => {
+    setPreviewing(true);
+    try {
+      const r = await window.FB.resolveSegmentPreview(draft, 12);
+      if (r && r.ok) setPreview(r); else setPreview({ error: (r && r.error) || "denied" });
+    } catch (e) { setPreview({ error: (e && e.message) || String(e) }); }
+    finally { setPreviewing(false); }
+  };
+
+  const save = async () => {
+    if (!(draft.name || "").trim()) { alert("Name required."); return; }
+    setSaving(true);
+    const r = await window.FB.saveSegment(draft);
+    setSaving(false);
+    if (!r || !r.ok) { alert("Save failed: " + (r && r.error)); return; }
+    onSaved && onSaved();
+  };
+
+  const tierOptions = ["bronze", "silver", "gold", "vip"];
+  const toggleTier = (t) => setDraft(d => {
+    const cur = (d.rules && d.rules.tierIn) || [];
+    const next = cur.indexOf(t) >= 0 ? cur.filter(x => x !== t) : cur.concat(t);
+    return Object.assign({}, d, { rules: Object.assign({}, d.rules || {}, { tierIn: next }) });
+  });
+
+  const label = { fontSize: 11, color: "#6B7280", fontWeight: 700, display: "block", marginBottom: 5 };
+  const inp = { padding: "9px 11px", border: "1px solid #E5E7EB", borderRadius: 8, fontSize: 13, width: "100%", outline: "none" };
+
+  return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(16,24,40,0.55)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 } },
+    React.createElement("div", { style: { background: "#fff", borderRadius: 16, width: "min(680px, 96vw)", maxHeight: "90vh", overflowY: "auto", padding: 20 } },
+      React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } },
+        React.createElement("div", { style: { fontWeight: 800, fontSize: 17 } }, draft.id ? "Edit segment" : "New segment"),
+        React.createElement("button", { onClick: onClose, style: { border: "none", background: "#F3F4F6", width: 30, height: 30, borderRadius: 8, fontWeight: 700, cursor: "pointer" } }, "×")
+      ),
+
+      React.createElement("div", { style: { marginBottom: 12 } },
+        React.createElement("label", { style: label }, "NAME"),
+        React.createElement("input", { style: inp, value: draft.name || "", onChange: e => setDraft(d => Object.assign({}, d, { name: e.target.value })), placeholder: "e.g. Inactive VIPs" })
+      ),
+      React.createElement("div", { style: { marginBottom: 14 } },
+        React.createElement("label", { style: label }, "DESCRIPTION (optional)"),
+        React.createElement("input", { style: inp, value: draft.description || "", onChange: e => setDraft(d => Object.assign({}, d, { description: e.target.value })), placeholder: "Free-form note for the team" })
+      ),
+
+      React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 12, background: "#FAFBFC" } },
+        React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 10 } }, "🎯 Filter rules"),
+
+        React.createElement("div", { style: { marginBottom: 12 } },
+          React.createElement("label", { style: label }, "TIERS (match any)"),
+          React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+            tierOptions.map(t => {
+              const on = ((draft.rules && draft.rules.tierIn) || []).indexOf(t) >= 0;
+              return React.createElement("button", { key: t, onClick: () => toggleTier(t),
+                style: { padding: "6px 12px", borderRadius: 999, border: "1.5px solid " + (on ? "#E10600" : "#EAECF2"), background: on ? "#FFF1F2" : "#fff", color: on ? "#E10600" : "#6B7280", fontSize: 12, fontWeight: 700, cursor: "pointer", textTransform: "capitalize" } }, t);
+            })
+          )
+        ),
+
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 } },
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "MIN LIFETIME SPEND (SR)"),
+            React.createElement("input", { style: inp, type: "number", value: draft.rules?.minSpend ?? "", onChange: e => e.target.value === "" ? clearRule("minSpend") : setRule("minSpend", Number(e.target.value)), placeholder: "e.g. 500" })
+          ),
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "MAX LIFETIME SPEND (SR)"),
+            React.createElement("input", { style: inp, type: "number", value: draft.rules?.maxSpend ?? "", onChange: e => e.target.value === "" ? clearRule("maxSpend") : setRule("maxSpend", Number(e.target.value)), placeholder: "e.g. 5000" })
+          )
+        ),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 } },
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "MIN ORDERS"),
+            React.createElement("input", { style: inp, type: "number", value: draft.rules?.minOrders ?? "", onChange: e => e.target.value === "" ? clearRule("minOrders") : setRule("minOrders", Number(e.target.value)), placeholder: "e.g. 3" })
+          ),
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "MAX ORDERS"),
+            React.createElement("input", { style: inp, type: "number", value: draft.rules?.maxOrders ?? "", onChange: e => e.target.value === "" ? clearRule("maxOrders") : setRule("maxOrders", Number(e.target.value)), placeholder: "" })
+          )
+        ),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 } },
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "INACTIVE ≥ N DAYS"),
+            React.createElement("input", { style: inp, type: "number", value: draft.rules?.inactiveDays ?? "", onChange: e => e.target.value === "" ? clearRule("inactiveDays") : setRule("inactiveDays", Number(e.target.value)), placeholder: "no last order in N days" })
+          ),
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "ACTIVE < N DAYS"),
+            React.createElement("input", { style: inp, type: "number", value: draft.rules?.activeWithinDays ?? "", onChange: e => e.target.value === "" ? clearRule("activeWithinDays") : setRule("activeWithinDays", Number(e.target.value)), placeholder: "ordered within N days" })
+          )
+        ),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 } },
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "MIN POINTS BALANCE"),
+            React.createElement("input", { style: inp, type: "number", value: draft.rules?.minPoints ?? "", onChange: e => e.target.value === "" ? clearRule("minPoints") : setRule("minPoints", Number(e.target.value)), placeholder: "" })
+          ),
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "MAX POINTS BALANCE"),
+            React.createElement("input", { style: inp, type: "number", value: draft.rules?.maxPoints ?? "", onChange: e => e.target.value === "" ? clearRule("maxPoints") : setRule("maxPoints", Number(e.target.value)), placeholder: "" })
+          )
+        ),
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "FAVOURITE BRANCH (last order / favBranch)"),
+          React.createElement("input", { style: inp, value: draft.rules?.favoriteBranch || "", onChange: e => e.target.value === "" ? clearRule("favoriteBranch") : setRule("favoriteBranch", e.target.value), placeholder: "branch id, e.g. kakkiyah" })
+        )
+      ),
+
+      React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 12, background: "#FAFBFC" } },
+        React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 10 } }, "➕ Force-in customer uids (always included)"),
+        React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 8 } },
+          React.createElement("input", { style: Object.assign({}, inp, { flex: 1 }), placeholder: "paste customer uid", value: uidInput.include, onChange: e => setUidInput(u => Object.assign({}, u, { include: e.target.value })) }),
+          React.createElement("button", { onClick: () => addUid("include"), className: "btn-secondary", style: { padding: "9px 14px", fontSize: 12 } }, "Add")
+        ),
+        React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } },
+          (draft.includeUids || []).map(u => React.createElement("div", { key: u, style: { background: "#E0E7FF", color: "#3730A3", padding: "4px 10px", borderRadius: 999, fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 } },
+            u.slice(0, 8) + "…",
+            React.createElement("button", { onClick: () => removeUid("include", u), style: { border: "none", background: "transparent", cursor: "pointer", color: "#3730A3", fontWeight: 800 } }, "×")
+          ))
+        )
+      ),
+      React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 12, background: "#FAFBFC" } },
+        React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 10 } }, "➖ Exclude customer uids (never included)"),
+        React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 8 } },
+          React.createElement("input", { style: Object.assign({}, inp, { flex: 1 }), placeholder: "paste customer uid", value: uidInput.exclude, onChange: e => setUidInput(u => Object.assign({}, u, { exclude: e.target.value })) }),
+          React.createElement("button", { onClick: () => addUid("exclude"), className: "btn-secondary", style: { padding: "9px 14px", fontSize: 12 } }, "Add")
+        ),
+        React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } },
+          (draft.excludeUids || []).map(u => React.createElement("div", { key: u, style: { background: "#F3F4F6", color: "#374151", padding: "4px 10px", borderRadius: 999, fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 } },
+            u.slice(0, 8) + "…",
+            React.createElement("button", { onClick: () => removeUid("exclude", u), style: { border: "none", background: "transparent", cursor: "pointer", color: "#374151", fontWeight: 800 } }, "×")
+          ))
+        )
+      ),
+
+      React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 14, background: "#F0F9FF", border: "1px solid #BAE6FD" } },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 } },
+          React.createElement("div", { style: { fontWeight: 800, fontSize: 13, color: "#0369A1" } }, "🔎 Audience preview"),
+          React.createElement("button", { onClick: doPreview, className: "btn-secondary", style: { padding: "6px 12px", fontSize: 12 }, disabled: previewing }, previewing ? "Counting…" : "Preview count")
+        ),
+        preview && preview.error ? React.createElement("div", { style: { color: "#B91C1C", fontSize: 12 } }, "Error: " + preview.error) : null,
+        preview && !preview.error ? React.createElement("div", null,
+          React.createElement("div", { style: { fontSize: 22, fontWeight: 800, color: "#0369A1", marginBottom: 8 } }, preview.count + " customer" + (preview.count === 1 ? "" : "s")),
+          (preview.sample && preview.sample.length > 0) ? React.createElement("div", { style: { fontSize: 12, color: "#0C4A6E" } },
+            "Sample: ",
+            (preview.sample || []).map((s, i) => React.createElement("span", { key: s.uid + i, style: { display: "inline-block", marginRight: 8 } }, (s.name || "?") + (s.phone ? " (" + s.phone + ")" : "")))
+          ) : null
+        ) : null
+      ),
+
+      React.createElement("div", { style: { display: "flex", gap: 10 } },
+        React.createElement("button", { onClick: onClose, className: "btn-secondary", style: { flex: 1, padding: 12, fontSize: 13 } }, "Cancel"),
+        React.createElement("button", { onClick: save, className: "btn-primary", style: { flex: 2, padding: 12, fontSize: 14, fontWeight: 800 }, disabled: saving }, saving ? "Saving…" : "💾 Save segment")
+      )
+    )
+  );
+}
+
+// ── Campaigns manager ───────────────────────────────────────────────
+function CampaignsManager({ campaigns, segments, branches }) {
+  const [editing, setEditing] = React.useState(null);
+  const [saving, setSaving] = React.useState(false);
+
+  const blank = () => ({
+    id: "", name: "", description: "",
+    segmentId: "", branches: [],
+    reward: { kind: "sr_discount", value: 10, label: "SR 10 off", expiresInDays: 30 },
+    budget: { maxRewards: 200, dailySrCap: 500, perCustomerLimit: 1 },
+    startAt: new Date().toISOString().slice(0, 10),
+    endAt: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
+    status: "draft"
+  });
+
+  const setStatus = async (c, s) => {
+    const ok = await window.FB.setCampaignStatus(c.id, s);
+    if (!ok) alert("Status change failed — check role/permissions.");
+  };
+  const issueNow = async (c) => {
+    if (!window.confirm("Issue campaign \"" + c.name + "\" to its audience now?")) return;
+    const r = await window.FB.issueCampaignNow(c.id);
+    if (r && r.ok) alert("Audience: " + r.audience + "\nIssued: " + r.issued + "\nSkipped (already had one): " + r.skipped + "\nBlocked (budget): " + r.blocked + "\nFailed: " + r.failed);
+    else alert("Issue failed: " + (r && r.error));
+  };
+  const del = async (c) => {
+    if (!window.confirm("Delete campaign \"" + c.name + "\"? Issued rewards remain valid.")) return;
+    await window.FB.deleteCampaign(c.id);
+  };
+
+  return React.createElement("div", null,
+    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
+      React.createElement("div", { style: { fontSize: 12, color: "#6B7280", fontWeight: 600 } }, (campaigns || []).length + " campaign(s)"),
+      React.createElement("button", { onClick: () => setEditing(blank()), className: "btn-primary", style: { padding: "9px 14px", fontSize: 13 } }, "＋ New campaign")
+    ),
+    (campaigns || []).length === 0 && React.createElement("div", { className: "card", style: { padding: 20, textAlign: "center", color: "#9CA3AF", fontSize: 13 } }, "No campaigns yet — build one to issue targeted rewards."),
+    (campaigns || []).map(c => {
+      const s = c.status || "draft";
+      const badgeCol = s === "active" ? "#059669" : s === "paused" ? "#D97706" : s === "ended" ? "#6B7280" : "#3B82F6";
+      const badgeBg = s === "active" ? "#DCFCE7" : s === "paused" ? "#FEF3C7" : s === "ended" ? "#F3F4F6" : "#DBEAFE";
+      const st = c.stats || {};
+      return React.createElement("div", { key: c.id, className: "card", style: { padding: 14, marginBottom: 10 } },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 10 } },
+          React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 4 } },
+              React.createElement("div", { style: { fontWeight: 800, fontSize: 14, color: "#111827" } }, c.name || "(unnamed)"),
+              React.createElement("span", { style: { background: badgeBg, color: badgeCol, padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.5 } }, s)
+            ),
+            c.description && React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 6 } }, c.description),
+            React.createElement("div", { style: { fontSize: 12, color: "#374151" } },
+              c.reward && c.reward.label ? React.createElement("span", { style: { fontWeight: 700 } }, "🎁 " + c.reward.label) : null,
+              c.segmentId ? React.createElement("span", { style: { marginLeft: 10 } }, "🎯 " + (segments.find(x => x.id === c.segmentId) || {}).name || c.segmentId) : React.createElement("span", { style: { marginLeft: 10, color: "#6B7280" } }, "🌐 Broadcast"),
+              c.startAt ? React.createElement("span", { style: { marginLeft: 10, color: "#6B7280" } }, "📅 " + c.startAt + (c.endAt ? " → " + c.endAt : "")) : null
+            ),
+            React.createElement("div", { style: { display: "flex", gap: 10, marginTop: 8, fontSize: 11, color: "#6B7280", fontWeight: 700 } },
+              React.createElement("span", null, "issued " + (st.issued || 0) + (c.budget && c.budget.maxRewards ? "/" + c.budget.maxRewards : "")),
+              React.createElement("span", null, "redeemed " + (st.redeemed || 0)),
+              c.budget && c.budget.dailySrCap ? React.createElement("span", null, "today SR " + (st.reservedSrToday || 0).toFixed(2) + "/" + c.budget.dailySrCap) : null
+            )
+          )
+        ),
+        React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+          s !== "active" && React.createElement("button", { onClick: () => setStatus(c, "active"), style: { background: "#DCFCE7", color: "#166534", border: "1px solid #BBF7D0", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" } }, "▶ Activate"),
+          s === "active" && React.createElement("button", { onClick: () => setStatus(c, "paused"), style: { background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" } }, "⏸ Pause"),
+          s !== "ended" && React.createElement("button", { onClick: () => setStatus(c, "ended"), style: { background: "#F3F4F6", color: "#374151", border: "1px solid #E5E7EB", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" } }, "⏹ End"),
+          s === "active" && React.createElement("button", { onClick: () => issueNow(c), style: { background: "#DBEAFE", color: "#1E40AF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" } }, "📤 Issue now"),
+          React.createElement("button", { onClick: () => setEditing(Object.assign({}, c)), className: "btn-secondary", style: { padding: "6px 10px", fontSize: 12 } }, "✎ Edit"),
+          React.createElement("button", { onClick: () => del(c), style: { background: "#FEE2E2", color: "#991B1B", border: "1px solid #FECACA", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" } }, "🗑")
+        )
+      );
+    }),
+    editing && React.createElement(CampaignEditor, { camp: editing, segments: segments, branches: branches, onClose: () => setEditing(null), onSaved: () => setEditing(null), saving: saving, setSaving: setSaving })
+  );
+}
+
+// ── Campaign editor modal ───────────────────────────────────────────
+function CampaignEditor({ camp, segments, branches, onClose, onSaved, saving, setSaving }) {
+  const [draft, setDraft] = React.useState(camp);
+  const set = (k, v) => setDraft(d => Object.assign({}, d, { [k]: v }));
+  const setReward = (k, v) => setDraft(d => Object.assign({}, d, { reward: Object.assign({}, d.reward || {}, { [k]: v }) }));
+  const setBudget = (k, v) => setDraft(d => Object.assign({}, d, { budget: Object.assign({}, d.budget || {}, { [k]: v }) }));
+  const toggleBranch = (id) => setDraft(d => {
+    const cur = d.branches || [];
+    return Object.assign({}, d, { branches: cur.indexOf(id) >= 0 ? cur.filter(x => x !== id) : cur.concat(id) });
+  });
+
+  const save = async () => {
+    if (!(draft.name || "").trim()) { alert("Name required."); return; }
+    if (!draft.reward || !draft.reward.kind) { alert("Reward kind required."); return; }
+    if (!(draft.reward.label || "").trim()) draft.reward.label = draft.name;
+    setSaving(true);
+    const r = await window.FB.saveCampaign(draft);
+    setSaving(false);
+    if (!r || !r.ok) { alert("Save failed: " + (r && r.error)); return; }
+    onSaved && onSaved();
+  };
+
+  const label = { fontSize: 11, color: "#6B7280", fontWeight: 700, display: "block", marginBottom: 5 };
+  const inp = { padding: "9px 11px", border: "1px solid #E5E7EB", borderRadius: 8, fontSize: 13, width: "100%", outline: "none" };
+
+  const REWARD_KINDS = [
+    { v: "sr_discount",      l: "Fixed SR discount",      hint: "value = SR off" },
+    { v: "percent_discount", l: "% discount",             hint: "value = percent (0-100)" },
+    { v: "bonus_points",     l: "Bonus / double points",  hint: "value = extra points" },
+    { v: "free_item",        l: "Free item",              hint: "productId + label" },
+    { v: "upgrade",          l: "Free upgrade (size up)", hint: "label describes it" },
+    { v: "free_addon",       l: "Free add-on",            hint: "sauce / drink / side" }
+  ];
+
+  return React.createElement("div", { style: { position: "fixed", inset: 0, background: "rgba(16,24,40,0.55)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 } },
+    React.createElement("div", { style: { background: "#fff", borderRadius: 16, width: "min(720px, 96vw)", maxHeight: "90vh", overflowY: "auto", padding: 20 } },
+      React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } },
+        React.createElement("div", { style: { fontWeight: 800, fontSize: 17 } }, draft.id ? "Edit campaign" : "New campaign"),
+        React.createElement("button", { onClick: onClose, style: { border: "none", background: "#F3F4F6", width: 30, height: 30, borderRadius: 8, fontWeight: 700, cursor: "pointer" } }, "×")
+      ),
+
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 } },
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "NAME"),
+          React.createElement("input", { style: inp, value: draft.name || "", onChange: e => set("name", e.target.value), placeholder: "e.g. Ramadan comeback" })
+        ),
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "STATUS"),
+          React.createElement("select", { style: inp, value: draft.status || "draft", onChange: e => set("status", e.target.value) },
+            React.createElement("option", { value: "draft" }, "Draft"),
+            React.createElement("option", { value: "active" }, "Active"),
+            React.createElement("option", { value: "paused" }, "Paused"),
+            React.createElement("option", { value: "ended" }, "Ended")
+          )
+        )
+      ),
+      React.createElement("div", { style: { marginBottom: 12 } },
+        React.createElement("label", { style: label }, "DESCRIPTION"),
+        React.createElement("input", { style: inp, value: draft.description || "", onChange: e => set("description", e.target.value), placeholder: "one-line note for the team" })
+      ),
+      React.createElement("div", { style: { marginBottom: 12 } },
+        React.createElement("label", { style: label }, "AUDIENCE"),
+        React.createElement("select", { style: inp, value: draft.segmentId || "", onChange: e => set("segmentId", e.target.value) },
+          React.createElement("option", { value: "" }, "🌐 Broadcast (all customers)"),
+          (segments || []).map(s => React.createElement("option", { key: s.id, value: s.id }, s.name))
+        )
+      ),
+      React.createElement("div", { style: { marginBottom: 12 } },
+        React.createElement("label", { style: label }, "BRANCHES (empty = all)"),
+        React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+          (branches || []).map(b => {
+            const on = (draft.branches || []).indexOf(b.id) >= 0;
+            return React.createElement("button", { key: b.id, onClick: () => toggleBranch(b.id),
+              style: { padding: "6px 12px", borderRadius: 999, border: "1.5px solid " + (on ? "#E10600" : "#EAECF2"), background: on ? "#FFF1F2" : "#fff", color: on ? "#E10600" : "#6B7280", fontSize: 12, fontWeight: 700, cursor: "pointer" } }, b.name);
+          })
+        )
+      ),
+
+      React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 12, background: "#FAFBFC" } },
+        React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 10 } }, "🎁 Reward"),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 } },
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "KIND"),
+            React.createElement("select", { style: inp, value: draft.reward?.kind || "sr_discount", onChange: e => setReward("kind", e.target.value) },
+              REWARD_KINDS.map(k => React.createElement("option", { key: k.v, value: k.v }, k.l))
+            )
+          ),
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "VALUE"),
+            React.createElement("input", { style: inp, type: "number", value: draft.reward?.value ?? "", onChange: e => setReward("value", Number(e.target.value)), placeholder: (REWARD_KINDS.find(k => k.v === draft.reward?.kind) || {}).hint })
+          )
+        ),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10, marginBottom: 10 } },
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "LABEL (printed on receipt)"),
+            React.createElement("input", { style: inp, value: draft.reward?.label || "", onChange: e => setReward("label", e.target.value), placeholder: "e.g. SR 10 off your next order" })
+          ),
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "EXPIRES IN DAYS"),
+            React.createElement("input", { style: inp, type: "number", value: draft.reward?.expiresInDays ?? 30, onChange: e => setReward("expiresInDays", Number(e.target.value)) })
+          )
+        ),
+        React.createElement("div", null,
+          React.createElement("label", { style: label }, "MIN ORDER (SR, optional)"),
+          React.createElement("input", { style: inp, type: "number", value: draft.reward?.minOrderSr ?? "", onChange: e => setReward("minOrderSr", Number(e.target.value)), placeholder: "leave blank for no minimum" })
+        )
+      ),
+
+      React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 12, background: "#FAFBFC" } },
+        React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 10 } }, "💰 Budget & limits"),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 } },
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "MAX REWARDS TOTAL"),
+            React.createElement("input", { style: inp, type: "number", value: draft.budget?.maxRewards ?? "", onChange: e => setBudget("maxRewards", Number(e.target.value)), placeholder: "hard cap" })
+          ),
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "DAILY SR CAP"),
+            React.createElement("input", { style: inp, type: "number", value: draft.budget?.dailySrCap ?? "", onChange: e => setBudget("dailySrCap", Number(e.target.value)), placeholder: "SR per day" })
+          ),
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "PER-CUSTOMER"),
+            React.createElement("input", { style: inp, type: "number", value: draft.budget?.perCustomerLimit ?? 1, onChange: e => setBudget("perCustomerLimit", Number(e.target.value)), placeholder: "1" })
+          )
+        )
+      ),
+
+      React.createElement("div", { className: "card", style: { padding: 14, marginBottom: 14, background: "#FAFBFC" } },
+        React.createElement("div", { style: { fontWeight: 700, fontSize: 13, marginBottom: 10 } }, "🗓 Schedule"),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 } },
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "START"),
+            React.createElement("input", { style: inp, type: "date", value: (draft.startAt || "").slice(0, 10), onChange: e => set("startAt", e.target.value) })
+          ),
+          React.createElement("div", null,
+            React.createElement("label", { style: label }, "END"),
+            React.createElement("input", { style: inp, type: "date", value: (draft.endAt || "").slice(0, 10), onChange: e => set("endAt", e.target.value) })
+          )
+        )
+      ),
+
+      React.createElement("div", { style: { display: "flex", gap: 10 } },
+        React.createElement("button", { onClick: onClose, className: "btn-secondary", style: { flex: 1, padding: 12, fontSize: 13 } }, "Cancel"),
+        React.createElement("button", { onClick: save, className: "btn-primary", style: { flex: 2, padding: 12, fontSize: 14, fontWeight: 800 }, disabled: saving }, saving ? "Saving…" : "💾 Save campaign")
       )
     )
   );
@@ -4587,6 +5071,7 @@ function App() {
     { id: "analytics", icon: "📊", label: "Stats" },
     { id: "reports", icon: "🧾", label: "Reports" },
     { id: "menu", icon: "🍗", label: "Menu" },
+    { id: "marketing", icon: "📣", label: "Marketing", ownerOnly: true },
     { id: "offers", icon: "🎁", label: "Offers", ownerOnly: true },
     { id: "coupons", icon: "🎟️", label: "Coupons", ownerOnly: true },
     { id: "customers", icon: "👥", label: "Customers" },
@@ -4851,6 +5336,7 @@ function App() {
       tab === "analytics" && React.createElement(AnalyticsTabNew, { orders: orders }),
       tab === "reports" && React.createElement(ReportsTabNew, { orders: orders, branches: BRANCHES, scopedBranchId: branchScope }),
       tab === "menu" && React.createElement(MenuTabNew, { menu: menu, setMenu: updateMenu, isOwner: isOwner, branches: BRANCHES, branchScope: branchScope }),
+      tab === "marketing" && isOwner && React.createElement(MarketingTab, { branches: BRANCHES }),
       tab === "offers" && isOwner && React.createElement(OffersTabNew, null),
       tab === "coupons" && isOwner && React.createElement(CouponsTabNew, null),
       tab === "customers" && React.createElement(CustomersTabNew, {
@@ -5312,6 +5798,46 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
             var res = await call({ id: id });
             return { ok: !!(res && res.data && res.data.ok) };
           } catch(e){ window.__fbErr("mission delete", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
+        },
+        // Phase 16 — segments & campaigns.
+        // All writes go through owner-gated Cloud Functions; reads use plain
+        // Firestore onSnapshot so the Marketing tab live-updates when the
+        // owner (or another device) edits a segment/campaign.
+        saveSegment: async function(segment){
+          try { var call = httpsCallable(_fns, "saveSegment"); var res = await call({ segment: segment }); return (res && res.data && res.data.ok) ? { ok: true, id: res.data.id } : { ok: false, error: "denied" }; }
+          catch(e){ return { ok: false, error: (e && (e.code || e.message)) || String(e) }; }
+        },
+        deleteSegment: async function(segmentId){
+          try { var call = httpsCallable(_fns, "deleteSegment"); var res = await call({ segmentId: segmentId }); return !!(res && res.data && res.data.ok); }
+          catch(e){ return false; }
+        },
+        resolveSegmentPreview: async function(segment, sampleSize){
+          try { var call = httpsCallable(_fns, "resolveSegmentPreview"); var res = await call({ segment: segment, sampleSize: sampleSize || 8 }); return (res && res.data && res.data.ok) ? { ok: true, count: res.data.count, sample: res.data.sample || [] } : { ok: false, error: "denied" }; }
+          catch(e){ return { ok: false, error: (e && (e.code || e.message)) || String(e) }; }
+        },
+        saveCampaign: async function(campaign){
+          try { var call = httpsCallable(_fns, "saveCampaign"); var res = await call({ campaign: campaign }); return (res && res.data && res.data.ok) ? { ok: true, id: res.data.id } : { ok: false, error: "denied" }; }
+          catch(e){ return { ok: false, error: (e && (e.code || e.message)) || String(e) }; }
+        },
+        deleteCampaign: async function(campaignId){
+          try { var call = httpsCallable(_fns, "deleteCampaign"); var res = await call({ campaignId: campaignId }); return !!(res && res.data && res.data.ok); }
+          catch(e){ return false; }
+        },
+        setCampaignStatus: async function(campaignId, status){
+          try { var call = httpsCallable(_fns, "setCampaignStatus"); var res = await call({ campaignId: campaignId, status: status }); return !!(res && res.data && res.data.ok); }
+          catch(e){ return false; }
+        },
+        issueCampaignNow: async function(campaignId){
+          try { var call = httpsCallable(_fns, "issueCampaignNow"); var res = await call({ campaignId: campaignId }); return (res && res.data && res.data.ok) ? { ok: true, ...res.data } : { ok: false, error: "denied" }; }
+          catch(e){ return { ok: false, error: (e && (e.code || e.message)) || String(e) }; }
+        },
+        onSegmentsChange: function(cb){
+          try { return onSnapshot(collection(_db, "settings/segments"), function(s){ cb(s.docs.map(function(d){ return Object.assign({ id: d.id }, d.data()); })); }); }
+          catch(e){ return function(){}; }
+        },
+        onCampaignsChange: function(cb){
+          try { return onSnapshot(collection(_db, "settings/campaigns"), function(s){ cb(s.docs.map(function(d){ return Object.assign({ id: d.id }, d.data()); })); }); }
+          catch(e){ return function(){}; }
         },
         forceRecomputeTier: async function(customerUid){
           try {

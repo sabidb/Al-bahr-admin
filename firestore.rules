@@ -230,8 +230,9 @@ service cloud.firestore {
     }
 
     // Phase 13 Wave C — missions catalog. PUBLIC READ so the customer app
-    // can render the "Today's missions" card before signing in. Owner-only
-    // writes through the saveMission callable — direct writes blocked.
+    // can render the "Today's missions" card before signing in (kind +
+    // reward.label are already non-sensitive). Owner-only writes through
+    // the saveMission callable — direct writes blocked.
     match /missions/{id} {
       allow read: if true;
       allow write: if false;
@@ -249,16 +250,53 @@ service cloud.firestore {
 
     // Phase 14 — referral codes reverse index (referralCodes/{code}).
     // NO client reads: exposing this would let a farmer harvest codes.
+    // Attach-time validation goes through the attachReferralCode callable
+    // which reads via the Admin SDK.
     match /referralCodes/{code} {
       allow read, write: if false;
     }
 
-    // Phase 14 — referrals ledger (referrals/{id}). Either party reads own;
-    // staff reads any. Writes server-only.
+    // Phase 14 — referrals ledger (referrals/{id}).
+    // Customer reads only rows where they are either party (referrer or
+    // referee) so both sides can see conversion progress. Staff reads any.
+    // Writes server-only (attachReferralCode + qualifyReferralOnOrder).
     match /referrals/{id} {
       allow read: if isStaff()
         || (signedIn() && resource.data.get('referrerUid', '') == request.auth.uid)
         || (signedIn() && resource.data.get('refereeUid', '') == request.auth.uid);
+      allow write: if false;
+    }
+
+    // Phase 16 — marketing segments (settings/segments/{id}).
+    // Staff can read to render the Marketing tab; owner-only writes come
+    // through the saveSegment / deleteSegment callables. Direct writes are
+    // denied so a compromised admin session can't bypass the callable's
+    // validation.
+    match /settings/segments/{id} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+
+    // Phase 16 — marketing campaigns (settings/campaigns/{id}). Same access
+    // model as segments — staff read, callables write.
+    match /settings/campaigns/{id} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+
+    // Phase 16 — per-(campaign,customer) issuance ledger. Staff reads any
+    // for operator dashboards; a customer reads their own so the app can
+    // show "you have a campaign reward". Writes server-only.
+    match /campaignRewards/{id} {
+      allow read: if isStaff()
+        || (signedIn() && resource.data.get('customerUid', '') == request.auth.uid);
+      allow write: if false;
+    }
+
+    // Phase 16 — audit trail. Owner-only reads (finance/ops review).
+    // Writes server-only.
+    match /campaignEvents/{id} {
+      allow read: if isOwner();
       allow write: if false;
     }
 
