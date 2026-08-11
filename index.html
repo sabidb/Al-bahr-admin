@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.25.2";
+const APP_VERSION = "8.26.0";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -791,7 +791,7 @@ function CouponsTabNew() {
 // branch printer; owner sees the default plus every branch.
 function PrinterSetup({ isOwner, branches, branchScope }) {
   const TP = () => (typeof window !== "undefined" ? window.ThermalPrint : null);
-  const initial = () => (TP() && TP().getConfig ? TP().getConfig() : { printerName: "PP9000EU", copies: 1, autoPrint: true, printerMap: {}, kitchenPrinterName: "", kitchenPrinterMap: {} });
+  const initial = () => (TP() && TP().getConfig ? TP().getConfig() : { printerName: "PP9000EU", copies: 1, autoPrint: true, autoAccept: false, printerMap: {}, kitchenPrinterName: "", kitchenPrinterMap: {} });
   const [cfg, setCfg] = React.useState(initial());
   const [connected, setConnected] = React.useState(false);
   const [saved, setSaved] = React.useState(false);
@@ -847,6 +847,7 @@ function PrinterSetup({ isOwner, branches, branchScope }) {
     t.setPrinterName(cfg.printerName || "PP9000EU");
     t.setCopies(cfg.copies || 1);
     t.setAutoPrint(!!cfg.autoPrint);
+    if (t.setAutoAccept) t.setAutoAccept(!!cfg.autoAccept);
     (branches || []).forEach(b => { t.setBranchPrinter(b.id, (cfg.printerMap && cfg.printerMap[b.id]) || ""); });
     if (t.setKitchenPrinterName) t.setKitchenPrinterName(cfg.kitchenPrinterName || "");
     if (t.setKitchenBranchPrinter) {
@@ -975,8 +976,21 @@ function PrinterSetup({ isOwner, branches, branchScope }) {
       )
     ),
 
-    // Auto-print + copies
+    // Auto-accept + Auto-print + copies
     React.createElement("div", { className: "card", style: { padding: 18, marginBottom: 14 } },
+      // Auto-accept — flips new orders straight to "preparing" server-side
+      // so the operator never has to click Accept. Auto-print then fires
+      // the moment the status change lands. Off by default: cashiers who
+      // want to eyeball the order first should leave this off.
+      React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid #F3F4F6" } },
+        React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+          React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27" } }, "Auto-accept new orders"),
+          React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 2 } }, "Skip the Accept button — orders auto-transition to Preparing the moment they land (and auto-print if that's on).")
+        ),
+        React.createElement("label", { style: { display: "inline-flex", cursor: "pointer", marginLeft: 12 } },
+          React.createElement("input", { type: "checkbox", checked: !!cfg.autoAccept, onChange: e => setField("autoAccept", e.target.checked), style: { width: 40, height: 24 } })
+        )
+      ),
       React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 } },
         React.createElement("div", null,
           React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: "#1A1D27" } }, "Auto-print accepted orders"),
@@ -1259,7 +1273,8 @@ function InvoiceSetup({ isOwner, branches, branchScope }) {
       toggleRow("Payment method", "", "showPayment"),
       toggleRow("Delivery location link", "Delivery orders only", "showLocation"),
       toggleRow("Items list", "", "showItems"),
-      toggleRow("Item Arabic name", "Show item.nameAr under each line", "showItemArabic"),
+      toggleRow("Item Arabic name", "Show item.nameAr under each line (needs Arabic-capable printer — otherwise blank)", "showItemArabic"),
+      toggleRow("Printer supports Arabic", "Off = strip Arabic before printing so the paper stays clean. Turn ON only if your printer has CP864/CP1256 firmware fonts.", "printerSupportsArabic"),
       toggleRow("Subtotal / fee breakdown", "Subtotal, platform fee, delivery, VAT", "showSubtotalBreakdown")
     ),
 
@@ -5045,13 +5060,31 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         // Points adjustment — owner-only server callable that writes the
         // Phase-12 ledger and updates the mirrored balance atomically. Every
         // other device sees the new balance the moment its onSnapshot fires.
+        // Errors bubble up with the ACTUAL server code (permission-denied,
+        // invalid-argument, failed-precondition, insufficient-balance) so
+        // the operator sees the real reason instead of a generic "check
+        // your internet" alert.
         adjustCustomerPoints: async function(customerUid, delta, reason){
           try {
             var call = httpsCallable(_fns, "adjustPoints");
             var res = await call({ customerUid: customerUid, delta: Math.round(Number(delta)||0), reason: String(reason||""), allowNegative: true });
             if (res && res.data && res.data.ok) return { ok: true, next: res.data.balance };
-            return { ok: false, error: "denied" };
-          } catch(e){ window.__fbErr("adjustCustomerPoints", e); return { ok: false, error: (e && e.code) || (e && e.message) || String(e) }; }
+            return { ok: false, error: (res && res.data && res.data.error) || "denied" };
+          } catch(e){
+            console.error("adjustCustomerPoints failed:", e);
+            // No __fbErr here — the caller renders an alert() with the
+            // real reason so the operator can act on it. __fbErr would
+            // stack a second, misleading "check internet" dialog on top.
+            var code = (e && e.code) || "";
+            var msg  = (e && e.message) || String(e);
+            var pretty = code === "functions/permission-denied" ? "Only the owner can adjust points."
+                       : code === "functions/invalid-argument"  ? ("Bad input — " + msg)
+                       : code === "functions/failed-precondition" ? msg
+                       : code === "functions/unauthenticated"   ? "You need to sign in again."
+                       : code ? (code + " — " + msg)
+                       : msg;
+            return { ok: false, error: pretty };
+          }
         },
         // Live subscription to a single customer doc — the panel calls this
         // on mount so name/points/notes/tier update in real time across
@@ -5328,7 +5361,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     }
     function saveCfg() {
       try { localStorage.setItem(LS_KEY, JSON.stringify({
-        printerName: PRINTER_NAME, copies: COPIES, autoPrint: AUTO_PRINT, printerMap: PRINTER_MAP,
+        printerName: PRINTER_NAME, copies: COPIES, autoPrint: AUTO_PRINT, autoAccept: AUTO_ACCEPT, printerMap: PRINTER_MAP,
         kitchenPrinterName: KITCHEN_PRINTER_NAME, kitchenPrinterMap: KITCHEN_PRINTER_MAP
       })); } catch(e){}
     }
@@ -5336,11 +5369,16 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     var _saved = loadCfg() || {};
     var PRINTER_NAME = _saved.printerName || "PP9000EU";  // default / fallback customer-receipt printer
     var AUTO_PRINT   = _saved.autoPrint !== false;         // auto-print every new order
+    var AUTO_ACCEPT  = _saved.autoAccept === true;         // auto-accept new orders (skips operator click)
     var COPIES       = _saved.copies || 1;                 // number of copies per order
     var PRINTER_MAP  = _saved.printerMap || {};            // per-branch customer printer { kakkiyah:"PP9000EU-1", ... }
     var KITCHEN_PRINTER_NAME = _saved.kitchenPrinterName || "";  // default kitchen printer (blank = disable kitchen ticket globally)
     var KITCHEN_PRINTER_MAP  = _saved.kitchenPrinterMap  || {};  // per-branch kitchen printer overrides
     var BRANCH_FILTER = "";                                // set by branch selection — only print matching branch
+    // Auto-accept dedup: once we've fired an updateOrderStatus for a given
+    // fbId we don't want the next snapshot (which still shows status "new"
+    // for a brief moment before the callable's write lands) to re-fire it.
+    var AUTO_ACCEPTED = new Set();
 
     // ── Phase 8: reliability ────────────────────────────────
     // Persist the printed-order dedup set so a page reload doesn't reprint an
@@ -5562,6 +5600,13 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       showLocation: true,          // delivery only
       showItems: true,
       showItemArabic: false,
+      // Most cheap 58/72/80mm thermals (PP9000EU / Xprinter / Bixolon
+      // clones) ship with a CP437/CP850 bitmap font — no Arabic glyphs
+      // at all — so ANY Arabic character prints as "?". When false we
+      // silently drop non-ASCII strings before they reach the head so
+      // the paper stays clean. Flip to true only when the printer has
+      // a firmware font that renders CP864/CP1256.
+      printerSupportsArabic: false,
       showSubtotalBreakdown: false,// subtotal + fees + VAT lines
       showLoyalty: true,
       loyaltyLabel: "Loyalty Points",
@@ -5664,6 +5709,16 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         str = str.replace(/[︎️‍]/g, "");
       } catch(_) {}
       return str.replace(/\s+/g, " ").trim();
+    }
+    // Cheap thermal heads print any non-ASCII char as "?" — so when the
+    // admin hasn't opted in to Arabic-capable printing we strip everything
+    // outside printable ASCII before it hits the paper. Returns "" when
+    // the input has no printable ASCII left (caller decides whether to
+    // fall back or skip the line entirely).
+    function toPrintable(s, arabicOk) {
+      var out = stripEmoji(s);
+      if (arabicOk) return out;
+      return out.replace(/[^\x20-\x7E]/g, "").replace(/\s+/g, " ").trim();
     }
 
     // ── ESC/POS QR code helper ──────────────────────────────
@@ -5833,7 +5888,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         lines.push(w("Labels", "Customer") + LF);
         // Name on its own line — style-configurable so the kitchen can size
         // it up when the pass is far from the printer.
-        lines.push(w("CustomerName", stripEmoji(order.userName || "Customer")) + LF);
+        var custName = toPrintable(order.userName || "Customer", !!C.printerSupportsArabic) || "Customer";
+        lines.push(w("CustomerName", custName) + LF);
         if (C.showPhone && order.userPhone) lines.push(w("Labels", "Phone:") + "  " + stripEmoji(order.userPhone) + LF);
         if (C.showPayment) lines.push(w("Labels", "Pay:") + "    " + stripEmoji(order.paymentMethod || "cash") + LF);
         if (C.showLocation && order.orderType === "delivery" && order.locationLink) {
@@ -5860,8 +5916,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       if (C.showItems) {
         lines.push(CENTER + w("Labels", "ITEMS") + LF);
         lines.push(line("-"));
+        var arabicOk = !!C.printerSupportsArabic;
         (order.items || []).forEach(function (item) {
-          var name = stripEmoji(item.name || "");
+          var name = toPrintable(item.name || "", arabicOk) || "ITEM";
           var qty = item.qty || 1;
           // Phase 6: prefer the persisted lineTotal (which already accounts
           // for any per-line comp) and fall back to price*qty for legacy rows.
@@ -5870,7 +5927,12 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
           // Name + qty at the ItemName/ItemQty sizes, note at ItemNote size,
           // price at ItemPrice — all four are independently configurable.
           lines.push(w("ItemName", name) + LF);
-          if (C.showItemArabic && item.nameAr) lines.push("  " + stripEmoji(item.nameAr) + LF);
+          if (C.showItemArabic && item.nameAr) {
+            var ar = toPrintable(item.nameAr, arabicOk);
+            // Skip the Arabic line entirely when nothing survives the ASCII
+            // filter — better a missing line than a row of "?" characters.
+            if (ar) lines.push("  " + ar + LF);
+          }
           lines.push(w("ItemQty", "  x" + qty) + LF);
           lines.push(open("ItemPrice") + pad("", price) + close("ItemPrice") + LF);
           // Menu-vs-app "was" annotation when the counter price is set higher
@@ -5881,7 +5943,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
           if (menuVal > lineTotal + 0.005) {
             lines.push(pad("", "(was SR " + Number(menuVal).toFixed(2) + ")") + LF);
           }
-          if (item.note) lines.push(w("ItemNote", "  >> " + stripEmoji(item.note)) + LF);
+          if (item.note) {
+            var itn = toPrintable(item.note, arabicOk);
+            if (itn) lines.push(w("ItemNote", "  >> " + itn) + LF);
+          }
         });
         lines.push(line("-"));
         if (subtotal != null) lines.push(pad("Subtotal", "SR " + subtotal.toFixed(2)) + LF);
@@ -5929,8 +5994,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
 
       // Order-level note (customer's "any special request" from checkout)
       if (order.note) {
-        lines.push(w("Labels", "Note:") + " " + (C.italicNote ? ITALIC_ON : "") + stripEmoji(order.note) + (C.italicNote ? ITALIC_OFF : "") + LF);
-        lines.push(LEFT + line("-"));
+        var on = toPrintable(order.note, arabicOk);
+        if (on) {
+          lines.push(w("Labels", "Note:") + " " + (C.italicNote ? ITALIC_ON : "") + on + (C.italicNote ? ITALIC_OFF : "") + LF);
+          lines.push(LEFT + line("-"));
+        }
       }
 
       // Loyalty — earned this order + total running balance from the customer doc.
@@ -6030,21 +6098,28 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       out.push(BOLD_ON + "Ready: " + BOLD_OFF + readyStr + " (~" + prepMin + " min)" + LF);
       out.push(LEFT + line("="));
 
+      var arabicOk = !!C.printerSupportsArabic;
       // Items — name in BIG on its own line, qty on the right in HUGE so
       // the cook can count at a glance. Note (if any) below in normal.
       (order.items || []).forEach(function (item) {
-        var name = stripEmoji(item.name || "");
+        var name = toPrintable(item.name || "", arabicOk) || "ITEM";
         var qty = "x" + (item.qty || 1);
         out.push(BIG + BOLD_ON + name + BOLD_OFF + NORMAL + LF);
         out.push(pad("", HUGE + BOLD_ON + qty + BOLD_OFF + NORMAL) + LF);
-        if (item.note) out.push("  >> " + stripEmoji(item.note) + LF);
+        if (item.note) {
+          var itn = toPrintable(item.note, arabicOk);
+          if (itn) out.push("  >> " + itn + LF);
+        }
         out.push(LEFT + line("-"));
       });
 
       // Order-wide note (e.g. "extra sauce for everything")
       if (order.note) {
-        out.push(BOLD_ON + "NOTE: " + BOLD_OFF + stripEmoji(order.note) + LF);
-        out.push(LEFT + line("-"));
+        var on = toPrintable(order.note, arabicOk);
+        if (on) {
+          out.push(BOLD_ON + "NOTE: " + BOLD_OFF + on + LF);
+          out.push(LEFT + line("-"));
+        }
       }
 
       var feed = Math.max(1, Number(C.feedLines) || 3);
@@ -6455,16 +6530,55 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     function _dedupKey(o) { return o.fbId || o.orderNo || ""; }
 
     function handleIncomingOrders(orders) {
-      if (!AUTO_PRINT) return;
+      // Nothing to do if both auto paths are off — operator drives every
+      // transition and every print by hand.
+      if (!AUTO_PRINT && !AUTO_ACCEPT) return;
 
-      // On first load, mark every already-known order as printed so
-      // reopening the app doesn't re-print history.
+      // On first load, mark every already-known order as printed AND
+      // already-auto-accepted so reopening the app doesn't re-print or
+      // re-accept a stale history dump.
       if (FIRST_LOAD) {
-        orders.forEach(function (o) { PRINTED_IDS.add(_dedupKey(o)); });
+        orders.forEach(function (o) {
+          PRINTED_IDS.add(_dedupKey(o));
+          if (o.fbId) AUTO_ACCEPTED.add(o.fbId);
+        });
         FIRST_LOAD = false;
         return;
       }
 
+      // ── Auto-accept: transition "new" orders to "preparing" ──────
+      // The status-change callable's write fires this listener again with
+      // status="preparing"; the auto-print block below then does the
+      // actual paper. This split keeps the audit trail (statusHistory)
+      // clean and lets the server's transition table stay authoritative.
+      if (AUTO_ACCEPT && window.FB && window.FB.updateOrderStatus) {
+        orders.filter(function (o) {
+          if (o.status !== "new") return false;
+          if (!o.fbId) return false;
+          if (AUTO_ACCEPTED.has(o.fbId)) return false;
+          if (BRANCH_FILTER && BRANCH_FILTER !== "all" && o.branch !== BRANCH_FILTER) return false;
+          return true;
+        }).forEach(function (o, i) {
+          AUTO_ACCEPTED.add(o.fbId);
+          setTimeout(function () {
+            window.FB.updateOrderStatus(o.fbId, "preparing").then(function (ok) {
+              if (ok) {
+                showStatus("✅ Auto-accepted #" + o.orderNo, "ok");
+              } else {
+                console.warn("Auto-accept returned false for #" + o.orderNo);
+                AUTO_ACCEPTED.delete(o.fbId); // let operator retry manually
+              }
+            }).catch(function (err) {
+              console.warn("Auto-accept failed for #" + o.orderNo + ":", err);
+              showStatus("⚠️ Auto-accept failed #" + o.orderNo, "error");
+              AUTO_ACCEPTED.delete(o.fbId);
+            });
+          }, 200 + i * 300); // gentle stagger so bursts don't hammer the callable
+        });
+      }
+
+      // ── Auto-print: paper for every order that's now "preparing" ─
+      if (!AUTO_PRINT) return;
       orders.filter(function (o) {
         if (o.status !== "preparing") return false;
         if (PRINTED_IDS.has(_dedupKey(o))) return false;
@@ -6689,6 +6803,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       reprint: reprintOrder,
       openSettings: openSettings,
       setAutoPrint: function (v) { AUTO_PRINT = !!v; saveCfg(); },
+      setAutoAccept: function (v) { AUTO_ACCEPT = !!v; saveCfg(); },
       setPrinterName: function (n) { PRINTER_NAME = n || "PP9000EU"; saveCfg(); },
       setBranchPrinter: function (branch, name) {
         if (!branch) return;
@@ -6704,7 +6819,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       setCopies: function (n) { COPIES = Math.max(1, parseInt(n,10)||1); saveCfg(); },
       setBranchFilter: function (b) { BRANCH_FILTER = b; console.log("🖨️ Print filter set to branch: " + b); },
       getStatus: function () { return qz && qz.websocket.isActive(); },
-      getConfig: function () { return { printerName: PRINTER_NAME, copies: COPIES, autoPrint: AUTO_PRINT, printerMap: Object.assign({}, PRINTER_MAP), kitchenPrinterName: KITCHEN_PRINTER_NAME, kitchenPrinterMap: Object.assign({}, KITCHEN_PRINTER_MAP) }; },
+      getConfig: function () { return { printerName: PRINTER_NAME, copies: COPIES, autoPrint: AUTO_PRINT, autoAccept: AUTO_ACCEPT, printerMap: Object.assign({}, PRINTER_MAP), kitchenPrinterName: KITCHEN_PRINTER_NAME, kitchenPrinterMap: Object.assign({}, KITCHEN_PRINTER_MAP) }; },
       // Live-preview helpers — return HTML the InvoiceSetup pane renders
       // in an iframe so the admin sees pending edits before Save.
       renderCustomerHTML: function (order, cfgOverride) { return buildReceiptHTML(order || {}, cfgOverride); },
