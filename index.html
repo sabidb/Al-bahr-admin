@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.30.2";
+const APP_VERSION = "8.30.3";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -6967,7 +6967,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var prepMin = order.orderType === "delivery" ? Number(C.prepMinutesDelivery) || 30 : Number(C.prepMinutesPickup) || 15;
       var readyBy = new Date(d.getTime() + prepMin * 60000).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
       var basePx = Math.max(11, Math.min(30, Number(C.fontHtmlPx) || 15));
-      function esc(s){ return stripEmoji(String(s == null ? "" : s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+      // Preview must match paper exactly — strip Arabic in the HTML render
+      // when the printer can't emit it, same rule the ESC/POS path uses.
+      var arabicOk = !!C.printerSupportsArabic;
+      function esc(s){ return toPrintable(String(s == null ? "" : s), arabicOk).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
       var items = (order.items || []).map(function (it) {
         var noteHTML = it.note ? "<div style='font-size:" + Math.round(basePx*0.9) + "px'>&gt;&gt; " + esc(it.note) + "</div>" : "";
@@ -6978,10 +6981,18 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
           "</div>";
       }).join("");
 
+      // Font stack — only families with full Arabic coverage. Noto Sans
+      // Arabic loads from Google Fonts when online; Tahoma / Arial are the
+      // system fallbacks that ship with full Arabic glyphs on Windows and
+      // macOS. Removed VT323 / Courier Prime / Courier New / Consolas —
+      // none render Arabic script.
       return "<!doctype html><html><head><meta charset='utf-8'/><title>Kitchen #" + esc(order.orderNo) + "</title>" +
+        "<link rel='preconnect' href='https://fonts.googleapis.com'/>" +
+        "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin/>" +
+        "<link href='https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700;900&display=swap' rel='stylesheet'/>" +
         "<style>" +
         "@page{size:72mm auto;margin:0}" +
-        "html,body{margin:0;padding:0;background:#fff;color:#000;font-family:'VT323','Courier Prime','Courier New','Consolas',monospace;font-size:" + basePx + "px;line-height:1.15;width:72mm;font-weight:700;-webkit-font-smoothing:none;font-smooth:never}" +
+        "html,body{margin:0;padding:0;background:#fff;color:#000;font-family:'Noto Sans Arabic','Tahoma','Arial',sans-serif;font-size:" + basePx + "px;line-height:1.15;width:72mm;font-weight:700;-webkit-font-smoothing:none;font-smooth:never}" +
         ".r{padding:6mm 4mm}" +
         ".c{text-align:center}" +
         "hr{border:none;border-top:1px dashed #000;margin:5px 0}.dbl{border-top:2px solid #000}" +
@@ -7053,7 +7064,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       }
       var tierMult = Number(order.loyaltyTierMult) > 0 ? Number(order.loyaltyTierMult) : 1;
       var pts = Math.round(basePts * tierMult);
-      function esc(s){ return stripEmoji(String(s == null ? "" : s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+      // Preview must match paper exactly — strip Arabic in the HTML render
+      // when the printer can't emit it, same rule the ESC/POS path uses.
+      var arabicOk = !!C.printerSupportsArabic;
+      function esc(s){ return toPrintable(String(s == null ? "" : s), arabicOk).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
       // Same style engine as the ESC/POS path — CSS class picked from
       // C.size<Section> + C.bold<Section> + C.italic<Section>. Every
@@ -7076,7 +7090,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         var qty = it.qty || 1;
         var lineTotal = (typeof it.lineTotal === "number") ? it.lineTotal : (it.price || 0) * qty;
         var right = "SR " + Number(lineTotal).toFixed(2);
-        var arLine = (C.showItemArabic && it.nameAr) ? "<div style='font-size:" + Math.round(basePx*0.85) + "px'>" + esc(it.nameAr) + "</div>" : "";
+        // Skip the Arabic line entirely when nothing survives — better a
+        // missing line than an empty div (or "?" boxes on unsupported heads).
+        var arText = (C.showItemArabic && it.nameAr) ? esc(it.nameAr) : "";
+        var arLine = arText ? "<div style='font-size:" + Math.round(basePx*0.85) + "px'>" + arText + "</div>" : "";
         var noteHTML = it.note ? "<div" + cls("ItemNote") + ">&gt;&gt; " + esc(it.note) + "</div>" : "";
         return "<tr>" +
           "<td class='n'>" + s("ItemName", esc(it.name || "")) + arLine + "<div" + cls("ItemQty") + ">x" + qty + "</div>" + noteHTML + "</td>" +
@@ -7124,16 +7141,19 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         }
       }
 
-      // Receipt-style monospace matches the thermal printer's bitmap font.
-      // VT323 gives the unmistakable receipt look; Courier Prime / New /
-      // Consolas step in when the Google Fonts request fails (offline).
+      // Font stack — only families with full Arabic coverage. Noto Sans
+      // Arabic loads from Google Fonts when online; Tahoma / Arial are the
+      // system fallbacks that ship with full Arabic glyphs on Windows and
+      // macOS. Removed VT323 / Courier Prime / Courier New / Consolas —
+      // none render Arabic script, so keeping them would make the preview
+      // differ from what an Arabic-capable printer actually emits.
       return "<!doctype html><html><head><meta charset='utf-8'/><title>Receipt #" + esc(order.orderNo) + "</title>" +
         "<link rel='preconnect' href='https://fonts.googleapis.com'/>" +
         "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin/>" +
-        "<link href='https://fonts.googleapis.com/css2?family=VT323&family=Courier+Prime:wght@400;700&display=swap' rel='stylesheet'/>" +
+        "<link href='https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;700;900&display=swap' rel='stylesheet'/>" +
         "<style>" +
         "@page{size:72mm auto;margin:0}" +
-        "html,body{margin:0;padding:0;background:#fff;color:#000;font-family:'VT323','Courier Prime','Courier New','Consolas',monospace;font-size:" + basePx + "px;line-height:1.15;width:72mm;font-weight:700;-webkit-font-smoothing:none;font-smooth:never}" +
+        "html,body{margin:0;padding:0;background:#fff;color:#000;font-family:'Noto Sans Arabic','Tahoma','Arial',sans-serif;font-size:" + basePx + "px;line-height:1.15;width:72mm;font-weight:700;-webkit-font-smoothing:none;font-smooth:never}" +
         ".r{padding:6mm 4mm}" +
         ".c{text-align:center}" +
         "hr{border:none;border-top:1px dashed #000;margin:5px 0}.dbl{border-top:2px solid #000}" +
