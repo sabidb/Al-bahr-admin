@@ -25,7 +25,7 @@
 
 // App version — patched automatically on every commit that touches
 // this file. See CLAUDE.md for the bump policy.
-const APP_VERSION = "8.30.3";
+const APP_VERSION = "8.30.4";
 window.APP_VERSION = APP_VERSION;
 
 const ADMIN_STYLES = `
@@ -7282,20 +7282,38 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
     }
 
     // ── Send to printer ─────────────────────────────────────
-    // Uses ESC/POS raw mode, which QZ Tray sends silently (no OS print dialog).
-    // Two independent jobs — customer receipt on the counter printer and
-    // (if configured) a kitchen ticket on the kitchen printer. Both dispatch
-    // in parallel; a missing/blank kitchen printer just skips its ticket.
-    function _sendRaw(target, payload) {
+    // Prints the same HTML the admin sees in the live preview: QZ Tray
+    // rasterizes the HTML (fonts, layout, Arabic — everything the browser
+    // draws) and sends the resulting bitmap to the thermal head. Silent,
+    // no OS print dialog. Paper = preview, byte-for-byte the same render.
+    //
+    // Old ESC/POS raw path is kept in code (buildReceipt / buildKitchenReceipt)
+    // but no longer called from here — it used the printer's ROM bitmap font,
+    // which is exactly what the operator asked us to stop doing.
+    //
+    // 72mm receipt roll, auto height, 203dpi (standard thermal head density),
+    // grayscale + nearest-neighbor so the raster stays crisp on the 1-bit head.
+    function _sendHtml(target, html) {
       return qz.printers.find(target).then(function (printer) {
         var actualPrinter = Array.isArray(printer) ? printer[0] : printer;
         if (!actualPrinter) throw new Error("Printer not found: " + target);
         var config = qz.configs.create(actualPrinter, {
           copies: COPIES,
-          rasterize: false,
-          altPrinting: false
+          rasterize: true,
+          size: { width: 72, height: null },
+          units: "mm",
+          density: 203,
+          margins: 0,
+          colorType: "grayscale",
+          interpolation: "nearest-neighbor",
+          scaleContent: true
         });
-        return qz.print(config, [{ type: "raw", format: "plain", data: payload }]);
+        return qz.print(config, [{
+          type: "pixel",
+          format: "html",
+          flavor: "plain",
+          data: html
+        }]);
       });
     }
     function _doPrint(order) {
@@ -7303,9 +7321,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
       var kitchenTarget = kitchenPrinterFor(order);
       return enrichOrder(order).then(function (enriched) {
         var jobs = [];
-        // Customer receipt (unchanged content)
+        // Customer receipt — HTML render, same file used by the live preview.
         if (customerTarget) {
-          jobs.push(_sendRaw(customerTarget, buildReceipt(enriched)).catch(function (e) {
+          jobs.push(_sendHtml(customerTarget, buildReceiptHTML(enriched)).catch(function (e) {
             console.warn("Customer receipt failed on " + customerTarget + ":", e && (e.message || e));
             throw e;
           }));
@@ -7314,7 +7332,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
         // this branch (or globally). Silent skip otherwise so branches that
         // print at the counter aren't forced to configure a kitchen printer.
         if (kitchenTarget) {
-          jobs.push(_sendRaw(kitchenTarget, buildKitchenReceipt(enriched)).catch(function (e) {
+          jobs.push(_sendHtml(kitchenTarget, buildKitchenReceiptHTML(enriched)).catch(function (e) {
             // A missing kitchen printer must not stop the customer receipt
             // from being counted as printed. Log + swallow.
             console.warn("Kitchen ticket failed on " + kitchenTarget + ":", e && (e.message || e));
